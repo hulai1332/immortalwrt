@@ -35,16 +35,19 @@ jobs:
         run: |
           set -e
 
-          # PassWall2 moved from xiaorouji to Openwrt-Passwall.
+          # Remove old/broken PassWall feed entries if present.
           sed -i '/openwrt-passwall-packages.git/d' feeds.conf.default
           sed -i '/openwrt-passwall2.git/d' feeds.conf.default
-          sed -i '/luci-theme-argon.git/d' feeds.conf.default
+          sed -i '/openwrt-passwall.git/d' feeds.conf.default
+          sed -i '/passwall_packages /d' feeds.conf.default
+          sed -i '/passwall_luci /d' feeds.conf.default
 
-          grep -q '^src-git passwall_packages ' feeds.conf.default || \
-            echo 'src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git' >> feeds.conf.default
-
-          grep -q '^src-git passwall2 ' feeds.conf.default || \
-            echo 'src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git' >> feeds.conf.default
+          # Use the current official PassWall repositories and pin to main.
+          cat >> feeds.conf.default <<'EOF'
+          src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main
+          src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main
+          src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git;main
+          EOF
 
           echo '===== feeds.conf.default ====='
           cat feeds.conf.default
@@ -67,6 +70,9 @@ jobs:
           echo '===== Verify PassWall packages ====='
           test -d feeds/passwall_packages
 
+          echo '===== Verify PassWall LuCI ====='
+          test -d feeds/passwall_luci
+
           echo '===== Verify Argon ====='
           test -f feeds/luci/themes/luci-theme-argon/Makefile
 
@@ -75,12 +81,6 @@ jobs:
         run: |
           set -e
 
-          # IMPORTANT:
-          # The working 2G JDCloud AX1800 Pro project uses EmmcImage for RE-SS-01.
-          # The current ImmortalWrt target definition was missing it, so
-          # CONFIG_TARGET_ROOTFS_PARTSIZE was discarded by make defconfig.
-          # Patch only this device definition at build time, matching the
-          # proven 2G project layout.
           python3 - <<'PY'
           from pathlib import Path
 
