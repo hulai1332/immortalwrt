@@ -30,49 +30,70 @@ jobs:
             wget xsltproc zlib1g-dev time
           sudo timedatectl set-timezone "$TZ"
 
-      - name: Add third party feeds
+      - name: Configure feeds
         working-directory: ${{ github.workspace }}
         run: |
+          set -e
+
+          # PassWall2 moved from xiaorouji to Openwrt-Passwall.
+          sed -i '/openwrt-passwall-packages.git/d' feeds.conf.default
+          sed -i '/openwrt-passwall2.git/d' feeds.conf.default
+          sed -i '/luci-theme-argon.git/d' feeds.conf.default
+
           grep -q '^src-git passwall_packages ' feeds.conf.default || \
-            echo 'src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git' >> feeds.conf.default
+            echo 'src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git' >> feeds.conf.default
 
           grep -q '^src-git passwall2 ' feeds.conf.default || \
-            echo 'src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git' >> feeds.conf.default
-
-          grep -q '^src-git argon ' feeds.conf.default || \
-            echo 'src-git argon https://github.com/jerrykuku/luci-theme-argon.git' >> feeds.conf.default
+            echo 'src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git' >> feeds.conf.default
 
           echo '===== feeds.conf.default ====='
           cat feeds.conf.default
 
-      - name: Update and install feeds
+      - name: Update feeds
         working-directory: ${{ github.workspace }}
         run: |
+          set -e
           ./scripts/feeds update -a
+
+      - name: Install feeds
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -e
           ./scripts/feeds install -a
 
-          test -d feeds/passwall2 || { echo 'ERROR: PassWall2 feed not found'; exit 1; }
-          test -d feeds/passwall_packages || { echo 'ERROR: PassWall packages feed not found'; exit 1; }
-          test -d feeds/argon || { echo 'ERROR: Argon feed not found'; exit 1; }
+          echo '===== Verify PassWall2 ====='
+          test -f feeds/passwall2/luci-app-passwall2/Makefile
+
+          echo '===== Verify PassWall packages ====='
+          test -d feeds/passwall_packages
+
+          echo '===== Verify Argon ====='
+          test -f feeds/luci/themes/luci-theme-argon/Makefile
 
       - name: Configure JDCloud AX1800 Pro
         working-directory: ${{ github.workspace }}
         run: |
+          set -e
+
           rm -f .config
 
           printf '%s\n' \
             'CONFIG_TARGET_qualcommax=y' \
             'CONFIG_TARGET_qualcommax_ipq60xx=y' \
             'CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' \
+            '' \
             'CONFIG_PACKAGE_luci=y' \
             'CONFIG_PACKAGE_luci-compat=y' \
             'CONFIG_LUCI_LANG_zh_Hans=y' \
+            '' \
             'CONFIG_PACKAGE_block-mount=y' \
             'CONFIG_PACKAGE_kmod-fs-ext4=y' \
             'CONFIG_PACKAGE_e2fsprogs=y' \
+            '' \
             'CONFIG_PACKAGE_luci-app-upnp=y' \
             'CONFIG_PACKAGE_luci-app-passwall2=y' \
-            'CONFIG_PACKAGE_luci-theme-argon=y' > .config
+            'CONFIG_PACKAGE_luci-theme-argon=y' \
+            > .config
 
           make defconfig
 
@@ -85,24 +106,28 @@ jobs:
       - name: Download sources
         working-directory: ${{ github.workspace }}
         run: |
+          set -e
           make download -j2 V=s
 
       - name: Compile firmware
         working-directory: ${{ github.workspace }}
         run: |
+          set -e
           make -j2 V=s
 
       - name: Verify firmware
         if: success()
         working-directory: ${{ github.workspace }}
         run: |
-          test -d bin/targets/qualcommax/ipq60xx
+          set -e
+          TARGET_DIR='bin/targets/qualcommax/ipq60xx'
+          test -d "$TARGET_DIR"
 
           echo '===== BUILD OUTPUT ====='
-          find bin/targets/qualcommax/ipq60xx -maxdepth 2 -type f | sort
+          find "$TARGET_DIR" -maxdepth 2 -type f | sort
 
           echo '===== AX1800 FILES ====='
-          find bin/targets/qualcommax/ipq60xx -type f \
+          find "$TARGET_DIR" -type f \
             \( -name '*jdcloud*' -o -name '*re-ss-01*' -o -name '*.itb' -o -name '*sysupgrade*.bin' \) \
             -print | sort
 
