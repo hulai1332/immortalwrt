@@ -31,97 +31,36 @@ jobs:
           sudo timedatectl set-timezone "$TZ"
 
       - name: Configure feeds
-        working-directory: ${{ github.workspace }}
         run: |
           set -e
-
           sed -i '/openwrt-passwall-packages.git/d' feeds.conf.default
           sed -i '/openwrt-passwall2.git/d' feeds.conf.default
           sed -i '/openwrt-passwall.git/d' feeds.conf.default
           sed -i '/passwall_packages /d' feeds.conf.default
           sed -i '/passwall_luci /d' feeds.conf.default
-
           cat >> feeds.conf.default <<'EOF'
           src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main
           src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main
           src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git;main
           EOF
-
-          echo '===== feeds.conf.default ====='
           cat feeds.conf.default
 
       - name: Update feeds
-        working-directory: ${{ github.workspace }}
-        run: |
-          set -e
-          ./scripts/feeds update -a
+        run: ./scripts/feeds update -a
 
       - name: Install feeds
-        working-directory: ${{ github.workspace }}
         run: |
           set -e
           ./scripts/feeds install -a
-
-          echo '===== Verify PassWall2 ====='
           test -f feeds/passwall2/luci-app-passwall2/Makefile
-
-          echo '===== Verify PassWall packages ====='
           test -d feeds/passwall_packages
-
-          echo '===== Verify PassWall LuCI ====='
           test -d feeds/passwall_luci
-
-          echo '===== Verify Argon ====='
           test -f feeds/luci/themes/luci-theme-argon/Makefile
 
-      - name: Configure JDCloud AX1800 Pro - 2G plugin partition
-        working-directory: ${{ github.workspace }}
+      - name: Configure JDCloud AX1800 Pro - known-good 2G eMMC layout
         run: |
           set -e
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path('target/linux/qualcommax/image/ipq60xx.mk')
-          s = p.read_text()
-
-          old = '''define Device/jdcloud_re-ss-01
-          \t$(call Device/FitImage)
-          \tDEVICE_VENDOR := JDCloud
-          \tDEVICE_MODEL := RE-SS-01
-          \tSOC := ipq6000
-          \tBLOCKSIZE := 64k
-          \tKERNEL_SIZE := 6144k
-          \tDEVICE_DTS_CONFIG := config@cp03-c2
-          \tDEVICE_PACKAGES := ipq-wifi-jdcloud_re-ss-01
-          endef
-          TARGET_DEVICES += jdcloud_re-ss-01'''
-
-          new = '''define Device/jdcloud_re-ss-01
-          \t$(call Device/FitImage)
-          \t$(call Device/EmmcImage)
-          \tDEVICE_VENDOR := JDCloud
-          \tDEVICE_MODEL := RE-SS-01
-          \tKERNEL_SIZE := 6144k
-          \tBLOCKSIZE := 128k
-          \tSOC := ipq6000
-          \tDEVICE_DTS_CONFIG := config@cp03-c2
-          \tDEVICE_PACKAGES := ipq-wifi-jdcloud_re-ss-01
-          \tIMAGE/factory.bin := append-kernel | pad-to $$(KERNEL_SIZE) | append-rootfs | append-metadata
-          endef
-          TARGET_DEVICES += jdcloud_re-ss-01'''
-
-          if old not in s:
-              raise SystemExit('ERROR: expected JDCloud RE-SS-01 definition not found')
-
-          p.write_text(s.replace(old, new, 1))
-          print('===== PATCHED JDCloud RE-SS-01 =====')
-          print('EmmcImage: enabled')
-          print('factory.bin: enabled')
-          PY
-
           rm -f .config
-
           cat > .config <<'EOF'
           CONFIG_TARGET_qualcommax=y
           CONFIG_TARGET_qualcommax_ipq60xx=y
@@ -130,66 +69,48 @@ jobs:
           CONFIG_PACKAGE_luci-compat=y
           CONFIG_LUCI_LANG_zh_Hans=y
           CONFIG_PACKAGE_block-mount=y
-          CONFIG_PACKAGE_kmod-fs-ext4=y
-          CONFIG_PACKAGE_e2fsprogs=y
+          CONFIG_PACKAGE_kmod-fs-f2fs=y
+          CONFIG_PACKAGE_f2fs-tools=y
           CONFIG_PACKAGE_luci-app-upnp=y
           CONFIG_PACKAGE_luci-app-passwall2=y
           CONFIG_PACKAGE_luci-theme-argon=y
           EOF
 
-          # Let ImmortalWrt normalize the target/package selections first.
           make defconfig
-
-          # IMPORTANT: this ImmortalWrt tree drops the legacy ROOTFS_PARTSIZE
-          # symbols during defconfig. The known-good 2G JDCloud build keeps
-          # these values in the final .config, so restore them AFTER defconfig.
-          sed -i '/^CONFIG_TARGET_ROOTFS_PARTSIZE=/d' .config
-          sed -i '/^CONFIG_TARGET_KERNEL_PARTSIZE=/d' .config
-          printf '%s\n' \
-            'CONFIG_TARGET_ROOTFS_PARTSIZE=2048' \
-            'CONFIG_TARGET_KERNEL_PARTSIZE=64' >> .config
 
           echo '===== TARGET ====='
           grep -E '^CONFIG_TARGET_(qualcommax|ipq60xx)' .config
-
-          echo '===== 2G PARTITION ====='
-          grep -E '^CONFIG_TARGET_(ROOTFS_PARTSIZE|KERNEL_PARTSIZE)=' .config
-          test "$(sed -n 's/^CONFIG_TARGET_ROOTFS_PARTSIZE=//p' .config)" = "2048"
-          test "$(sed -n 's/^CONFIG_TARGET_KERNEL_PARTSIZE=//p' .config)" = "64"
-
+          echo '===== NOTE ====='
+          echo 'Using Device/EmmcImage; do NOT force legacy ROOTFS_PARTSIZE.'
+          echo 'Known-good reference: JDCloud p18 = 2 GiB, loop0 + F2FS overlay.'
           echo '===== PACKAGES ====='
-          grep -E '^CONFIG_PACKAGE_(luci|luci-app-passwall2|luci-theme-argon|luci-app-upnp|block-mount|kmod-fs-ext4|e2fsprogs)' .config || true
+          grep -E '^CONFIG_PACKAGE_(luci|luci-app-passwall2|luci-theme-argon|luci-app-upnp|block-mount|kmod-fs-f2fs|f2fs-tools)' .config || true
+
+      - name: Verify image definition
+        run: |
+          set -e
+          grep -A12 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk
+          grep -A12 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk | grep 'Device/EmmcImage'
+          grep -A12 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk | grep 'IMAGE/factory.bin'
 
       - name: Download sources
-        working-directory: ${{ github.workspace }}
-        run: |
-          set -e
-          make download -j2 V=s
+        run: make download -j2 V=s
 
       - name: Compile firmware
-        working-directory: ${{ github.workspace }}
-        run: |
-          set -e
-          make -j2 V=s
+        run: make -j2 V=s
 
       - name: Verify firmware
         if: success()
-        working-directory: ${{ github.workspace }}
         run: |
           set -e
           TARGET_DIR='bin/targets/qualcommax/ipq60xx'
           test -d "$TARGET_DIR"
-
-          echo '===== FINAL 2G CONFIG ====='
-          grep -E '^CONFIG_TARGET_(ROOTFS_PARTSIZE|KERNEL_PARTSIZE)=' .config
-
           echo '===== BUILD OUTPUT ====='
           find "$TARGET_DIR" -maxdepth 2 -type f | sort
-
-          echo '===== AX1800 FILES ====='
-          find "$TARGET_DIR" -type f \
-            \( -name '*jdcloud*' -o -name '*re-ss-01*' -o -name '*.itb' -o -name '*sysupgrade*.bin' \) \
-            -print | sort
+          echo '===== REQUIRED JDCloud IMAGES ====='
+          find "$TARGET_DIR" -type f \( -name '*jdcloud*' -o -name '*re-ss-01*' \) -print | sort
+          test -n "$(find "$TARGET_DIR" -type f -name '*jdcloud*re-ss-01*squashfs-factory.bin' -print -quit)"
+          test -n "$(find "$TARGET_DIR" -type f -name '*jdcloud*re-ss-01*squashfs-sysupgrade.bin' -print -quit)"
 
       - name: Upload firmware
         if: success()
