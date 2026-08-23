@@ -57,7 +57,7 @@ jobs:
           test -d feeds/passwall_luci
           test -f feeds/luci/themes/luci-theme-argon/Makefile
 
-      - name: Configure JDCloud AX1800 Pro - known-good 2G eMMC layout
+      - name: Configure JDCloud AX1800 Pro - stable factory build
         run: |
           set -e
           rm -f .config
@@ -69,8 +69,6 @@ jobs:
           CONFIG_PACKAGE_luci-compat=y
           CONFIG_LUCI_LANG_zh_Hans=y
           CONFIG_PACKAGE_block-mount=y
-          CONFIG_PACKAGE_kmod-fs-f2fs=y
-          CONFIG_PACKAGE_f2fs-tools=y
           CONFIG_PACKAGE_luci-app-upnp=y
           CONFIG_PACKAGE_luci-app-passwall2=y
           CONFIG_PACKAGE_luci-theme-argon=y
@@ -80,18 +78,16 @@ jobs:
 
           echo '===== TARGET ====='
           grep -E '^CONFIG_TARGET_(qualcommax|ipq60xx)' .config
-          echo '===== NOTE ====='
-          echo 'Using Device/EmmcImage; do NOT force legacy ROOTFS_PARTSIZE.'
-          echo 'Known-good reference: JDCloud p18 = 2 GiB, loop0 + F2FS overlay.'
           echo '===== PACKAGES ====='
-          grep -E '^CONFIG_PACKAGE_(luci|luci-app-passwall2|luci-theme-argon|luci-app-upnp|block-mount|kmod-fs-f2fs|f2fs-tools)' .config || true
+          grep -E '^CONFIG_PACKAGE_(luci|luci-app-passwall2|luci-theme-argon|luci-app-upnp|block-mount)' .config || true
 
       - name: Verify image definition
         run: |
           set -e
-          grep -A12 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk
-          grep -A12 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk | grep 'Device/EmmcImage'
-          grep -A12 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk | grep 'IMAGE/factory.bin'
+          echo '===== JDCloud DEVICE DEFINITION ====='
+          grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk
+          echo '===== FACTORY IMAGE RULE ====='
+          grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk | grep 'IMAGE/factory.bin'
 
       - name: Download sources
         run: make download -j2 V=s
@@ -116,7 +112,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ImmortalWrt-JDCloud-AX1800-Pro-2G
+          name: ImmortalWrt-JDCloud-AX1800-Pro
           path: bin/targets/qualcommax/ipq60xx/
           if-no-files-found: error
           retention-days: 7
