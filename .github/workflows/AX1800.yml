@@ -3,86 +3,114 @@ name: Build ImmortalWrt for JDCloud AX1800 Pro
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+env:
+  TZ: Asia/Shanghai
+
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout workflow repository
+      - name: Checkout ImmortalWrt source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Install build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential ccache curl file gawk gettext git libncurses-dev libssl-dev python3 python3-pip rsync unzip wget xsltproc zlib1g-dev time
-
-      - name: Clone ImmortalWrt
-        run: |
-          git clone --depth=1 --branch master https://github.com/hulai1332/immortalwrt.git /workdir/openwrt
-          echo "OPENWRT=/workdir/openwrt" >> "$GITHUB_ENV"
-          cd /workdir/openwrt
-          echo "Source commit: $(git rev-parse --short HEAD)"
+          sudo apt-get install -y \
+            build-essential ccache curl file gawk gettext git \
+            libncurses-dev libssl-dev python3 python3-pip rsync unzip \
+            wget xsltproc zlib1g-dev time
+          sudo timedatectl set-timezone "$TZ"
 
       - name: Add third party feeds
+        working-directory: ${{ github.workspace }}
         run: |
-          cd "$OPENWRT"
-          grep -q '^src-git passwall_packages ' feeds.conf.default || echo 'src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git' >> feeds.conf.default
-          grep -q '^src-git passwall2 ' feeds.conf.default || echo 'src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git' >> feeds.conf.default
-          grep -q '^src-git argon ' feeds.conf.default || echo 'src-git argon https://github.com/jerrykuku/luci-theme-argon.git' >> feeds.conf.default
+          grep -q '^src-git passwall_packages ' feeds.conf.default || \
+            echo 'src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git' >> feeds.conf.default
+
+          grep -q '^src-git passwall2 ' feeds.conf.default || \
+            echo 'src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git' >> feeds.conf.default
+
+          grep -q '^src-git argon ' feeds.conf.default || \
+            echo 'src-git argon https://github.com/jerrykuku/luci-theme-argon.git' >> feeds.conf.default
+
+          echo '===== feeds.conf.default ====='
+          cat feeds.conf.default
 
       - name: Update and install feeds
+        working-directory: ${{ github.workspace }}
         run: |
-          cd "$OPENWRT"
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          test -d feeds/passwall2
-          test -d feeds/passwall_packages
-          test -d feeds/argon
-          find package feeds -path '*luci-app-passwall2*' -o -path '*luci-theme-argon*' | head -50
+
+          test -d feeds/passwall2 || { echo 'ERROR: PassWall2 feed not found'; exit 1; }
+          test -d feeds/passwall_packages || { echo 'ERROR: PassWall packages feed not found'; exit 1; }
+          test -d feeds/argon || { echo 'ERROR: Argon feed not found'; exit 1; }
 
       - name: Configure JDCloud AX1800 Pro
+        working-directory: ${{ github.workspace }}
         run: |
-          cd "$OPENWRT"
           rm -f .config
-          printf '%s\n' 'CONFIG_TARGET_qualcommax=y' >> .config
-          printf '%s\n' 'CONFIG_TARGET_qualcommax_ipq60xx=y' >> .config
-          printf '%s\n' 'CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' >> .config
-          printf '%s\n' 'CONFIG_PACKAGE_luci=y' >> .config
-          printf '%s\n' 'CONFIG_PACKAGE_luci-compat=y' >> .config
-          printf '%s\n' 'CONFIG_LUCI_LANG_zh_Hans=y' >> .config
-          printf '%s\n' 'CONFIG_PACKAGE_block-mount=y' >> .config
-          printf '%s\n' 'CONFIG_PACKAGE_kmod-fs-ext4=y' >> .config
-          printf '%s\n' 'CONFIG_PACKAGE_e2fsprogs=y' >> .config
-          printf '%s\n' 'CONFIG_PACKAGE_luci-app-upnp=y' >> .config
-          printf '%s\n' 'CONFIG_PACKAGE_luci-app-passwall2=y' >> .config
-          printf '%s\n' 'CONFIG_PACKAGE_luci-theme-argon=y' >> .config
+
+          printf '%s\n' \
+            'CONFIG_TARGET_qualcommax=y' \
+            'CONFIG_TARGET_qualcommax_ipq60xx=y' \
+            'CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' \
+            'CONFIG_PACKAGE_luci=y' \
+            'CONFIG_PACKAGE_luci-compat=y' \
+            'CONFIG_LUCI_LANG_zh_Hans=y' \
+            'CONFIG_PACKAGE_block-mount=y' \
+            'CONFIG_PACKAGE_kmod-fs-ext4=y' \
+            'CONFIG_PACKAGE_e2fsprogs=y' \
+            'CONFIG_PACKAGE_luci-app-upnp=y' \
+            'CONFIG_PACKAGE_luci-app-passwall2=y' \
+            'CONFIG_PACKAGE_luci-theme-argon=y' > .config
+
           make defconfig
+
           echo '===== TARGET ====='
-          grep '^CONFIG_TARGET_' .config | head -20
-          echo '===== SELECTED PACKAGES ====='
-          grep -E 'luci-app-passwall2|luci-theme-argon|luci-app-upnp' .config || true
+          grep -E '^CONFIG_TARGET_(qualcommax|ipq60xx)' .config
+
+          echo '===== PACKAGES ====='
+          grep -E '^CONFIG_PACKAGE_(luci|luci-app-passwall2|luci-theme-argon|luci-app-upnp|block-mount|kmod-fs-ext4|e2fsprogs)' .config || true
 
       - name: Download sources
+        working-directory: ${{ github.workspace }}
         run: |
-          cd "$OPENWRT"
           make download -j2 V=s
 
       - name: Compile firmware
+        working-directory: ${{ github.workspace }}
         run: |
-          cd "$OPENWRT"
           make -j2 V=s
 
       - name: Verify firmware
+        if: success()
+        working-directory: ${{ github.workspace }}
         run: |
-          cd "$OPENWRT"
           test -d bin/targets/qualcommax/ipq60xx
-          echo '===== FIRMWARE ====='
+
+          echo '===== BUILD OUTPUT ====='
           find bin/targets/qualcommax/ipq60xx -maxdepth 2 -type f | sort
 
+          echo '===== AX1800 FILES ====='
+          find bin/targets/qualcommax/ipq60xx -type f \
+            \( -name '*jdcloud*' -o -name '*re-ss-01*' -o -name '*.itb' -o -name '*sysupgrade*.bin' \) \
+            -print | sort
+
       - name: Upload firmware
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ImmortalWrt-JDCloud-AX1800-Pro
-          path: /workdir/openwrt/bin/targets/qualcommax/ipq60xx/
+          path: bin/targets/qualcommax/ipq60xx/
           if-no-files-found: error
           retention-days: 7
