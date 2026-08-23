@@ -75,6 +75,53 @@ jobs:
         run: |
           set -e
 
+          # IMPORTANT:
+          # The working 2G JDCloud AX1800 Pro project uses EmmcImage for RE-SS-01.
+          # The current ImmortalWrt target definition was missing it, so
+          # CONFIG_TARGET_ROOTFS_PARTSIZE was discarded by make defconfig.
+          # Patch only this device definition at build time, matching the
+          # proven 2G project layout.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('target/linux/qualcommax/image/ipq60xx.mk')
+          s = p.read_text()
+
+          old = '''define Device/jdcloud_re-ss-01
+          \t$(call Device/FitImage)
+          \tDEVICE_VENDOR := JDCloud
+          \tDEVICE_MODEL := RE-SS-01
+          \tSOC := ipq6000
+          \tBLOCKSIZE := 64k
+          \tKERNEL_SIZE := 6144k
+          \tDEVICE_DTS_CONFIG := config@cp03-c2
+          \tDEVICE_PACKAGES := ipq-wifi-jdcloud_re-ss-01
+          endef
+          TARGET_DEVICES += jdcloud_re-ss-01'''
+
+          new = '''define Device/jdcloud_re-ss-01
+          \t$(call Device/FitImage)
+          \t$(call Device/EmmcImage)
+          \tDEVICE_VENDOR := JDCloud
+          \tDEVICE_MODEL := RE-SS-01
+          \tKERNEL_SIZE := 6144k
+          \tBLOCKSIZE := 128k
+          \tSOC := ipq6000
+          \tDEVICE_DTS_CONFIG := config@cp03-c2
+          \tDEVICE_PACKAGES := ipq-wifi-jdcloud_re-ss-01
+          \tIMAGE/factory.bin := append-kernel | pad-to $$(KERNEL_SIZE) | append-rootfs | append-metadata
+          endef
+          TARGET_DEVICES += jdcloud_re-ss-01'''
+
+          if old not in s:
+              raise SystemExit('ERROR: expected JDCloud RE-SS-01 definition not found')
+
+          p.write_text(s.replace(old, new, 1))
+          print('===== PATCHED JDCloud RE-SS-01 =====')
+          print('EmmcImage: enabled')
+          print('factory.bin: enabled')
+          PY
+
           rm -f .config
 
           printf '%s\n' \
@@ -107,6 +154,7 @@ jobs:
           echo '===== 2G PARTITION ====='
           grep -E '^CONFIG_TARGET_(ROOTFS_PARTSIZE|KERNEL_PARTSIZE)=' .config
           test "$(sed -n 's/^CONFIG_TARGET_ROOTFS_PARTSIZE=//p' .config)" = "2048"
+          test "$(sed -n 's/^CONFIG_TARGET_KERNEL_PARTSIZE=//p' .config)" = "64"
 
           echo '===== PACKAGES ====='
           grep -E '^CONFIG_PACKAGE_(luci|luci-app-passwall2|luci-theme-argon|luci-app-upnp|block-mount|kmod-fs-ext4|e2fsprogs)' .config || true
