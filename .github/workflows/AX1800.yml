@@ -16,128 +16,89 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout workflow repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Initialization environment
+      - name: Install build dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo rm -rf /etc/apt/sources.list.d/*
           sudo apt-get update
-          sudo apt-get install -y \
-            ack asciidoc autoconf automake autopoint binutils bison build-essential \
-            bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk \
-            gettext gcc-multilib g++-multilib git gperf haveged help2man intltool \
-            libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
-            libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev \
-            libssl-dev libtool mkisofs p7zip p7zip-full patch pkg-config python3 \
-            python3-pip python3-ply python3-docutils qemu-utils rsync subversion \
-            swig texinfo u-boot-tools unzip wget xsltproc xz-utils zlib1g-dev
+          sudo apt-get install -y build-essential ccache curl file gawk gettext git libncurses-dev libssl-dev python3 python3-distutils rsync unzip wget xsltproc zlib1g-dev time
           sudo timedatectl set-timezone "$TZ"
-          mkdir -p /workdir
-          sudo chown "$USER:$USER" /workdir
 
-      - name: Clone ImmortalWrt source
-        working-directory: /workdir
+      - name: Clone ImmortalWrt
         run: |
-          git clone --depth=1 -b "$REPO_BRANCH" "$REPO_URL" openwrt
+          mkdir -p /workdir
+          git clone --depth=1 -b "$REPO_BRANCH" "$REPO_URL" /workdir/openwrt
           ln -sfn /workdir/openwrt "$GITHUB_WORKSPACE/openwrt"
-          cd openwrt
-          echo "Source: $(git remote get-url origin)"
-          echo "Commit: $(git rev-parse --short HEAD)"
+          cd /workdir/openwrt
+          git rev-parse --short HEAD
 
       - name: Configure feeds
+        working-directory: /workdir/openwrt
         run: |
-          cd openwrt
-          grep -q '^src-git passwall_packages ' feeds.conf.default || \
-            echo 'src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git' >> feeds.conf.default
-          grep -q '^src-git passwall2 ' feeds.conf.default || \
-            echo 'src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git' >> feeds.conf.default
-          grep -q '^src-git argon ' feeds.conf.default || \
-            echo 'src-git argon https://github.com/jerrykuku/luci-theme-argon.git' >> feeds.conf.default
+          grep -q '^src-git passwall_packages ' feeds.conf.default || echo 'src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git' >> feeds.conf.default
+          grep -q '^src-git passwall2 ' feeds.conf.default || echo 'src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git' >> feeds.conf.default
+          grep -q '^src-git argon ' feeds.conf.default || echo 'src-git argon https://github.com/jerrykuku/luci-theme-argon.git' >> feeds.conf.default
           cat feeds.conf.default
 
       - name: Update feeds
         working-directory: /workdir/openwrt
         run: |
-          ./scripts/feeds clean
           ./scripts/feeds update -a
 
       - name: Install feeds
         working-directory: /workdir/openwrt
         run: |
           ./scripts/feeds install -a
-          test -d feeds/passwall2 || { echo 'ERROR: PassWall2 feed not found'; exit 1; }
-          test -d feeds/passwall_packages || { echo 'ERROR: PassWall packages feed not found'; exit 1; }
-          test -d feeds/argon || { echo 'ERROR: Argon feed not found'; exit 1; }
+          test -d feeds/passwall2
+          test -d feeds/passwall_packages
+          test -d feeds/argon
 
-      - name: Configure JDCloud AX1800 Pro
+      - name: Configure AX1800 Pro
         working-directory: /workdir/openwrt
         run: |
-          rm -f .config
-
-          cat > .config <<'EOF'
-CONFIG_TARGET_qualcommax=y
-CONFIG_TARGET_qualcommax_ipq60xx=y
-CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y
-
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-compat=y
-CONFIG_LUCI_LANG_zh_Hans=y
-
-CONFIG_PACKAGE_block-mount=y
-CONFIG_PACKAGE_kmod-fs-ext4=y
-CONFIG_PACKAGE_e2fsprogs=y
-
-CONFIG_PACKAGE_luci-app-upnp=y
-CONFIG_PACKAGE_luci-app-passwall2=y
-CONFIG_PACKAGE_luci-theme-argon=y
-EOF
-
+          printf '%s\n' \
+            'CONFIG_TARGET_qualcommax=y' \
+            'CONFIG_TARGET_qualcommax_ipq60xx=y' \
+            'CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' \
+            'CONFIG_PACKAGE_luci=y' \
+            'CONFIG_PACKAGE_luci-compat=y' \
+            'CONFIG_LUCI_LANG_zh_Hans=y' \
+            'CONFIG_PACKAGE_block-mount=y' \
+            'CONFIG_PACKAGE_kmod-fs-ext4=y' \
+            'CONFIG_PACKAGE_e2fsprogs=y' \
+            'CONFIG_PACKAGE_luci-app-upnp=y' \
+            'CONFIG_PACKAGE_luci-app-passwall2=y' \
+            'CONFIG_PACKAGE_luci-theme-argon=y' > .config
           make defconfig
-
           echo '===== TARGET ====='
-          grep -E '^CONFIG_TARGET_(qualcommax|ipq60xx)' .config
-
+          grep '^CONFIG_TARGET_' .config
           echo '===== PACKAGES ====='
-          grep -E '^CONFIG_PACKAGE_(luci|luci-app-passwall2|luci-theme-argon|block-mount|kmod-fs-ext4|e2fsprogs|luci-app-upnp)' .config || true
+          grep -E '^CONFIG_PACKAGE_(luci|luci-app-passwall2|luci-theme-argon|luci-app-upnp|block-mount|kmod-fs-ext4|e2fsprogs)' .config || true
 
-      - name: Download package sources
+      - name: Download sources
         working-directory: /workdir/openwrt
         run: |
           make download -j$(nproc) V=s
 
-      - name: Compile firmware
+      - name: Compile
         working-directory: /workdir/openwrt
         run: |
           make -j$(nproc) V=s
 
-      - name: Verify firmware
+      - name: Verify output
         if: success()
         run: |
-          echo '===== BUILD OUTPUT ====='
+          test -d openwrt/bin/targets/qualcommax/ipq60xx
           find openwrt/bin/targets/qualcommax/ipq60xx -maxdepth 2 -type f | sort
 
-          echo '===== EXPECTED AX1800 FILES ====='
-          find openwrt/bin/targets/qualcommax/ipq60xx -type f \
-            \( -name '*jdcloud*' -o -name '*re-ss-01*' -o -name '*.itb' -o -name '*sysupgrade*.bin' \) \
-            -print | sort
-
-      - name: Organize firmware
-        id: organize
+      - name: Upload firmware
         if: success()
-        run: |
-          TARGET_DIR=openwrt/bin/targets/qualcommax/ipq60xx
-          test -d "$TARGET_DIR" || { echo 'Firmware directory not found'; exit 1; }
-          rm -rf "$TARGET_DIR/packages"
-          echo "FIRMWARE=$TARGET_DIR" >> "$GITHUB_ENV"
-
-      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
-        if: steps.organize.outcome == 'success'
         with:
           name: ImmortalWrt-JDCloud-AX1800-Pro
-          path: ${{ env.FIRMWARE }}
+          path: openwrt/bin/targets/qualcommax/ipq60xx/
           if-no-files-found: error
           retention-days: 7
