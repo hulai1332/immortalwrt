@@ -1,104 +1,88 @@
-name: Build ImmortalWrt for JD Cloud AX1800 Pro
+name: Build ImmortalWrt for JDCloud AX1800 Pro
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: read
-
-env:
-  REPO_URL: https://github.com/hulai1332/immortalwrt.git
-  REPO_BRANCH: master
-  TZ: Asia/Shanghai
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
+      - name: Checkout workflow repository
         uses: actions/checkout@v4
 
       - name: Install build dependencies
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential ccache curl file gawk gettext git libncurses-dev libssl-dev python3 python3-distutils rsync unzip wget xsltproc zlib1g-dev time
-          sudo timedatectl set-timezone "$TZ"
+          sudo apt-get install -y build-essential ccache curl file gawk gettext git libncurses-dev libssl-dev python3 python3-pip rsync unzip wget xsltproc zlib1g-dev time
 
       - name: Clone ImmortalWrt
         run: |
-          mkdir -p /workdir
-          git clone --depth=1 -b "$REPO_BRANCH" "$REPO_URL" /workdir/openwrt
-          ln -sfn /workdir/openwrt "$GITHUB_WORKSPACE/openwrt"
+          git clone --depth=1 --branch master https://github.com/hulai1332/immortalwrt.git /workdir/openwrt
+          echo "OPENWRT=/workdir/openwrt" >> "$GITHUB_ENV"
           cd /workdir/openwrt
-          git rev-parse --short HEAD
+          echo "Source commit: $(git rev-parse --short HEAD)"
 
-      - name: Configure feeds
-        working-directory: /workdir/openwrt
+      - name: Add third party feeds
         run: |
+          cd "$OPENWRT"
           grep -q '^src-git passwall_packages ' feeds.conf.default || echo 'src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git' >> feeds.conf.default
           grep -q '^src-git passwall2 ' feeds.conf.default || echo 'src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git' >> feeds.conf.default
           grep -q '^src-git argon ' feeds.conf.default || echo 'src-git argon https://github.com/jerrykuku/luci-theme-argon.git' >> feeds.conf.default
-          cat feeds.conf.default
 
-      - name: Update feeds
-        working-directory: /workdir/openwrt
+      - name: Update and install feeds
         run: |
+          cd "$OPENWRT"
           ./scripts/feeds update -a
-
-      - name: Install feeds
-        working-directory: /workdir/openwrt
-        run: |
           ./scripts/feeds install -a
           test -d feeds/passwall2
           test -d feeds/passwall_packages
           test -d feeds/argon
+          find package feeds -path '*luci-app-passwall2*' -o -path '*luci-theme-argon*' | head -50
 
-      - name: Configure AX1800 Pro
-        working-directory: /workdir/openwrt
+      - name: Configure JDCloud AX1800 Pro
         run: |
-          printf '%s\n' \
-            'CONFIG_TARGET_qualcommax=y' \
-            'CONFIG_TARGET_qualcommax_ipq60xx=y' \
-            'CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' \
-            'CONFIG_PACKAGE_luci=y' \
-            'CONFIG_PACKAGE_luci-compat=y' \
-            'CONFIG_LUCI_LANG_zh_Hans=y' \
-            'CONFIG_PACKAGE_block-mount=y' \
-            'CONFIG_PACKAGE_kmod-fs-ext4=y' \
-            'CONFIG_PACKAGE_e2fsprogs=y' \
-            'CONFIG_PACKAGE_luci-app-upnp=y' \
-            'CONFIG_PACKAGE_luci-app-passwall2=y' \
-            'CONFIG_PACKAGE_luci-theme-argon=y' > .config
+          cd "$OPENWRT"
+          rm -f .config
+          printf '%s\n' 'CONFIG_TARGET_qualcommax=y' >> .config
+          printf '%s\n' 'CONFIG_TARGET_qualcommax_ipq60xx=y' >> .config
+          printf '%s\n' 'CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' >> .config
+          printf '%s\n' 'CONFIG_PACKAGE_luci=y' >> .config
+          printf '%s\n' 'CONFIG_PACKAGE_luci-compat=y' >> .config
+          printf '%s\n' 'CONFIG_LUCI_LANG_zh_Hans=y' >> .config
+          printf '%s\n' 'CONFIG_PACKAGE_block-mount=y' >> .config
+          printf '%s\n' 'CONFIG_PACKAGE_kmod-fs-ext4=y' >> .config
+          printf '%s\n' 'CONFIG_PACKAGE_e2fsprogs=y' >> .config
+          printf '%s\n' 'CONFIG_PACKAGE_luci-app-upnp=y' >> .config
+          printf '%s\n' 'CONFIG_PACKAGE_luci-app-passwall2=y' >> .config
+          printf '%s\n' 'CONFIG_PACKAGE_luci-theme-argon=y' >> .config
           make defconfig
           echo '===== TARGET ====='
-          grep '^CONFIG_TARGET_' .config
-          echo '===== PACKAGES ====='
-          grep -E '^CONFIG_PACKAGE_(luci|luci-app-passwall2|luci-theme-argon|luci-app-upnp|block-mount|kmod-fs-ext4|e2fsprogs)' .config || true
+          grep '^CONFIG_TARGET_' .config | head -20
+          echo '===== SELECTED PACKAGES ====='
+          grep -E 'luci-app-passwall2|luci-theme-argon|luci-app-upnp' .config || true
 
       - name: Download sources
-        working-directory: /workdir/openwrt
         run: |
-          make download -j$(nproc) V=s
+          cd "$OPENWRT"
+          make download -j2 V=s
 
-      - name: Compile
-        working-directory: /workdir/openwrt
+      - name: Compile firmware
         run: |
-          make -j$(nproc) V=s
+          cd "$OPENWRT"
+          make -j2 V=s
 
-      - name: Verify output
-        if: success()
+      - name: Verify firmware
         run: |
-          test -d openwrt/bin/targets/qualcommax/ipq60xx
-          find openwrt/bin/targets/qualcommax/ipq60xx -maxdepth 2 -type f | sort
+          cd "$OPENWRT"
+          test -d bin/targets/qualcommax/ipq60xx
+          echo '===== FIRMWARE ====='
+          find bin/targets/qualcommax/ipq60xx -maxdepth 2 -type f | sort
 
       - name: Upload firmware
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ImmortalWrt-JDCloud-AX1800-Pro
-          path: openwrt/bin/targets/qualcommax/ipq60xx/
+          path: /workdir/openwrt/bin/targets/qualcommax/ipq60xx/
           if-no-files-found: error
           retention-days: 7
