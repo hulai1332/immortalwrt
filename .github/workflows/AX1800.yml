@@ -94,8 +94,6 @@ jobs:
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
           EOF
           make defconfig
-          # v24.10.6 may drop the manual image-size override during defconfig.
-          # Restore it after dependency resolution so the image builder receives 2048 MiB.
           sed -i '/^CONFIG_TARGET_ROOTFS_PARTSIZE=/d' .config
           echo 'CONFIG_TARGET_ROOTFS_PARTSIZE=2048' >> .config
           echo '===== TARGET / ROOTFS ====='
@@ -127,7 +125,22 @@ jobs:
         run: make download -j2 V=s
 
       - name: Compile firmware
-        run: make -j2 V=s
+        shell: bash
+        run: |
+          set -o pipefail
+          LOGFILE="$GITHUB_WORKSPACE/build.log"
+          echo "Build log: $LOGFILE"
+          set +e
+          make -j2 V=s 2>&1 | tee "$LOGFILE"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '===== BUILD FAILED: LAST 300 LINES ====='
+            tail -300 "$LOGFILE"
+            echo '===== BUILD FAILED: FIRST ERROR MATCHES ====='
+            grep -n -m 20 -E '(^|: )(error:|fatal error:|Error [0-9]+|make\[[0-9]+\]: \*\*\*)' "$LOGFILE" || true
+            exit "$status"
+          fi
 
       - name: Verify firmware
         if: success()
@@ -136,26 +149,19 @@ jobs:
           TARGET_DIR='bin/targets/qualcommax/ipq60xx'
           test -d "$TARGET_DIR"
           find "$TARGET_DIR" -maxdepth 2 -type f -printf '%p %s bytes\n' | sort
-
           FACTORY="$(find "$TARGET_DIR" -type f -name '*jdcloud*re-ss-01*squashfs-factory.bin' -print -quit)"
           SYSUPGRADE="$(find "$TARGET_DIR" -type f -name '*jdcloud*re-ss-01*squashfs-sysupgrade.bin' -print -quit)"
           test -n "$FACTORY"
           test -n "$SYSUPGRADE"
-
           echo "FACTORY=$FACTORY"
           echo "SYSUPGRADE=$SYSUPGRADE"
           FACTORY_SIZE=$(stat -c '%s' "$FACTORY")
           echo "FACTORY_SIZE=$FACTORY_SIZE bytes"
-
-          # A genuine 2 GiB rootfs target must produce a factory image far larger
-          # than the previous ~100-200 MiB small image. Fail instead of uploading
-          # a misleading artifact if the image-size target was not propagated.
           MIN_FACTORY_SIZE=$((1800 * 1024 * 1024))
           if [ "$FACTORY_SIZE" -lt "$MIN_FACTORY_SIZE" ]; then
             echo "ERROR: factory image is smaller than 1800 MiB; 2G rootfs target was not propagated"
             exit 1
           fi
-
           echo '===== FINAL IMAGE SIZE CHECK ====='
           du -h "$FACTORY" "$SYSUPGRADE"
 
