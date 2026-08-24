@@ -42,96 +42,42 @@ jobs:
       - name: Update feeds
         run: ./scripts/feeds update -a
 
-      - name: Install only required LuCI feed packages
+      - name: Install official LuCI packages only
         run: |
           set -e
           ./scripts/feeds install luci luci-compat luci-i18n-base-zh-cn
 
-      - name: Backport complete JDCloud RE-SS-01 DTS dependency set for 24.10.6
+      - name: Backport complete JDCloud RE-SS-01 DTS dependency set
         run: |
           set -e
           DTS_DIR="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom"
           PATCH_DIR="target/linux/qualcommax/patches-6.6"
           mkdir -p "$DTS_DIR" "$PATCH_DIR"
-
           BASE_URL="https://raw.githubusercontent.com/immortalwrt/immortalwrt/604e315e3ca4a61bad4cc1af0562167752b4deef/target/linux/qualcommax"
 
-          # RE-SS-01 DTS and the two DTSI files it directly includes.
-          curl -fsSL "$BASE_URL/dts/ipq6000-re-ss-01.dts" \
-            -o "$DTS_DIR/ipq6000-re-ss-01.dts"
-          curl -fsSL "$BASE_URL/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi" \
-            -o "$DTS_DIR/ipq6018-512m.dtsi"
-          curl -fsSL "$BASE_URL/files/arch/arm64/boot/dts/qcom/ipq6018-ess.dtsi" \
-            -o "$DTS_DIR/ipq6018-ess.dtsi"
+          curl -fsSL "$BASE_URL/dts/ipq6000-re-ss-01.dts" -o "$DTS_DIR/ipq6000-re-ss-01.dts"
+          curl -fsSL "$BASE_URL/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi" -o "$DTS_DIR/ipq6018-512m.dtsi"
+          curl -fsSL "$BASE_URL/files/arch/arm64/boot/dts/qcom/ipq6018-ess.dtsi" -o "$DTS_DIR/ipq6018-ess.dtsi"
+
+          curl -fsSL "https://raw.githubusercontent.com/openwrt/openwrt/af6cf5d8c0869a4ec0a711752a17883162e4afca/target/linux/qualcommax/patches-6.6/0083-v6.11-arm64-dts-qcom-ipq6018-add-sdhci-node.patch" \
+            -o "$PATCH_DIR/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch"
 
           test -s "$DTS_DIR/ipq6000-re-ss-01.dts"
           test -s "$DTS_DIR/ipq6018-512m.dtsi"
           test -s "$DTS_DIR/ipq6018-ess.dtsi"
+          test -s "$PATCH_DIR/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch"
           grep -q 'model = "JDCloud RE-SS-01"' "$DTS_DIR/ipq6000-re-ss-01.dts"
           grep -q 'uniphy0:' "$DTS_DIR/ipq6018-ess.dtsi"
-
-          # Linux 6.6 used by ImmortalWrt 24.10.6 does not expose the
-          # ipq6018 SDHCI node as &sdhc. RE-SS-01 uses eMMC, so backport the
-          # upstream SDHCI node instead of deleting &sdhc from the board DTS.
-          cat > "$PATCH_DIR/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch" <<'EOF'
-From 5db216f6e1f85394e79dca74ceceb83b2f8566b5 Mon Sep 17 00:00:00 2001
-From: Chukun Pan <amadeus@jmu.edu.cn>
-Date: Thu, 20 Jun 2024 23:01:22 +0800
-Subject: [PATCH] arm64: dts: qcom: ipq6018: add sdhci node
-
-Add node to support mmc controller inside of IPQ6018.
-This controller supports both eMMC and SD cards.
-
-Tested with:
- eMMC (HS200)
- SD Card (SDR50/SDR104)
-
-Signed-off-by: Chukun Pan <amadeus@jmu.edu.cn>
-Signed-off-by: Bjorn Andersson <andersson@kernel.org>
----
- arch/arm64/boot/dts/qcom/ipq6018.dtsi | 19 +++++++++++++++++++
- 1 file changed, 19 insertions(+)
-
---- a/arch/arm64/boot/dts/qcom/ipq6018.dtsi
-+++ b/arch/arm64/boot/dts/qcom/ipq6018.dtsi
-@@ -441,6 +441,25 @@ dwc_1: usb@7000000 {
- 			};
- 		};
- 
-+		sdhc: mmc@7804000 {
-+			compatible = "qcom,ipq6018-sdhci", "qcom,sdhci-msm-v5";
-+			reg = <0x0 0x7804000 0x0 0x1000>,
-+			      <0x0 0x7805000 0x0 0x1000>;
-+			reg-names = "hc", "cqhci";
-+
-+			interrupts = <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>,
-+				     <GIC_SPI 138 IRQ_TYPE_LEVEL_HIGH>;
-+			interrupt-names = "hc_irq", "pwr_irq";
-+
-+			clocks = <&gcc GCC_SDCC1_AHB_CLK>,
-+				 <&gcc GCC_SDCC1_APPS_CLK>,
-+				 <&xo>;
-+			clock-names = "iface", "core", "xo";
-+			resets = <&gcc GCC_SDCC1_BCR>;
-+			max-frequency = <192000000>;
-+			status = "disabled";
-+		};
-+
- 		blsp_dma: dma-controller@7884000 {
- 			compatible = "qcom,bam-v1.7.0";
- 			reg = <0x0 0x07884000 0x0 0x2b000>;
--- 
-2.43.0
-EOF
+          grep -q 'sdhc: mmc@7804000' "$PATCH_DIR/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch"
 
           echo '===== RE-SS-01 DTS ====='
-          head -12 "$DTS_DIR/ipq6000-re-ss-01.dts"
-          echo '===== RE-SS-01 DTSI DEPENDENCIES ====='
+          head -20 "$DTS_DIR/ipq6000-re-ss-01.dts"
+          echo '===== DTSI DEPENDENCIES ====='
           grep -nE '^(#include|.*uniphy0:)' "$DTS_DIR/ipq6018-512m.dtsi" "$DTS_DIR/ipq6018-ess.dtsi" || true
-          echo '===== SDHC BACKPORT PATCH ====='
-          grep -A22 '^+.*sdhc:' "$PATCH_DIR/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch"
+          echo '===== SDHC PATCH ====='
+          grep -n 'sdhc: mmc@7804000' "$PATCH_DIR/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch"
 
-      - name: Add JDCloud AX1800 eMMC factory image definition
+      - name: Add JDCloud AX1800 image definition
         run: |
           set -e
           cat >> target/linux/qualcommax/image/ipq60xx.mk <<'EOF'
@@ -151,7 +97,7 @@ EOF
           TARGET_DEVICES += jdcloud_re-ss-01
           EOF
 
-      - name: Set LAN IP to 192.168.20.1
+      - name: Set LAN IP
         run: |
           set -e
           mkdir -p files/etc/uci-defaults
@@ -182,38 +128,20 @@ EOF
           make defconfig
           sed -i '/^CONFIG_TARGET_ROOTFS_PARTSIZE=/d' .config
           echo 'CONFIG_TARGET_ROOTFS_PARTSIZE=2048' >> .config
-          echo '===== TARGET / ROOTFS ====='
-          grep -E '^CONFIG_TARGET_(qualcommax|ipq60xx|ROOTFS|KERNEL_PARTSIZE)' .config
-          echo '===== CLEAN PACKAGE CONFIG ====='
-          grep -E '^CONFIG_PACKAGE_(luci|luci-compat|luci-i18n-base-zh-cn)' .config || true
-          echo '===== FORBIDDEN THIRD-PARTY PACKAGES ====='
+          grep -q '^CONFIG_TARGET_ROOTFS_PARTSIZE=2048$' .config
           if grep -E '^CONFIG_PACKAGE_(luci-app-(passwall|passwall2|homeproxy|mosdns|adguardhome|openclash)|passwall|homeproxy|mosdns|adguardhome|openclash)' .config; then
-            echo 'ERROR: forbidden third-party package selected'
+            echo 'ERROR: third-party package selected'
             exit 1
           fi
-          grep -q '^CONFIG_TARGET_ROOTFS_PARTSIZE=2048$' .config
 
-      - name: Verify image definition, DTS dependencies and clean config
+      - name: Verify configuration
         run: |
           set -e
-          echo '===== JDCloud DEVICE DEFINITION ====='
-          grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk
-          echo '===== 2G ROOTFS TARGET ====='
           grep '^CONFIG_TARGET_ROOTFS_PARTSIZE=2048$' .config
-          echo '===== LAN DEFAULT ====='
-          cat files/etc/uci-defaults/99-jdcloud-lan-ip
-          echo '===== DTS FILES ====='
-          DTS_DIR='target/linux/qualcommax/files/arch/arm64/boot/dts/qcom'
-          test -s "$DTS_DIR/ipq6000-re-ss-01.dts"
-          test -s "$DTS_DIR/ipq6018-512m.dtsi"
-          test -s "$DTS_DIR/ipq6018-ess.dtsi"
-          grep -q 'uniphy0:' "$DTS_DIR/ipq6018-ess.dtsi"
-          echo '===== SDHC PATCH ====='
+          grep '^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' .config
+          grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk
+          test -s target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
           test -s target/linux/qualcommax/patches-6.6/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch
-          echo '===== FACTORY RULE ====='
-          grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk | grep 'IMAGE/factory.bin'
-          echo '===== EMMC IMAGE ====='
-          grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk | grep 'Device/EmmcImage'
 
       - name: Download sources
         run: make download -j2 V=s
@@ -223,9 +151,6 @@ EOF
         run: |
           set -o pipefail
           LOGFILE="$GITHUB_WORKSPACE/build.log"
-          echo "Build log: $LOGFILE"
-          echo "CFLAGS=$CFLAGS"
-          echo "CXXFLAGS=$CXXFLAGS"
           set +e
           make -j2 V=s 2>&1 | tee "$LOGFILE"
           status=${PIPESTATUS[0]}
@@ -233,7 +158,7 @@ EOF
           if [ "$status" -ne 0 ]; then
             echo '===== BUILD FAILED: LAST 300 LINES ====='
             tail -300 "$LOGFILE"
-            echo '===== BUILD FAILED: FIRST ERROR MATCHES ====='
+            echo '===== FIRST ERROR MATCHES ====='
             grep -n -m 30 -E '(^|: )(error:|fatal error:|Error [0-9]+|make\[[0-9]+\]: \*\*\*)' "$LOGFILE" || true
             exit "$status"
           fi
@@ -244,7 +169,6 @@ EOF
           set -e
           TARGET_DIR='bin/targets/qualcommax/ipq60xx'
           test -d "$TARGET_DIR"
-          find "$TARGET_DIR" -maxdepth 2 -type f -printf '%p %s bytes\n' | sort
           FACTORY="$(find "$TARGET_DIR" -type f -name '*jdcloud*re-ss-01*squashfs-factory.bin' -print -quit)"
           SYSUPGRADE="$(find "$TARGET_DIR" -type f -name '*jdcloud*re-ss-01*squashfs-sysupgrade.bin' -print -quit)"
           test -n "$FACTORY"
@@ -252,13 +176,11 @@ EOF
           echo "FACTORY=$FACTORY"
           echo "SYSUPGRADE=$SYSUPGRADE"
           FACTORY_SIZE=$(stat -c '%s' "$FACTORY")
-          echo "FACTORY_SIZE=$FACTORY_SIZE bytes"
           MIN_FACTORY_SIZE=$((1800 * 1024 * 1024))
           if [ "$FACTORY_SIZE" -lt "$MIN_FACTORY_SIZE" ]; then
-            echo "ERROR: factory image is smaller than 1800 MiB; 2G rootfs target was not propagated"
+            echo "ERROR: factory image is smaller than 1800 MiB"
             exit 1
           fi
-          echo '===== FINAL IMAGE SIZE CHECK ====='
           du -h "$FACTORY" "$SYSUPGRADE"
 
       - name: Upload firmware
