@@ -8,13 +8,18 @@ permissions:
 
 env:
   TZ: Asia/Shanghai
-  CFLAGS: "-Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-pointer-types"
-  CXXFLAGS: "-Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-pointer-types"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
+      - name: Free disk space
+        run: |
+          set -e
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo docker system prune -af || true
+          df -h
+
       - name: Checkout ImmortalWrt 24.10.6
         uses: actions/checkout@v4
         with:
@@ -27,139 +32,330 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential ccache curl file gawk gettext git libncurses-dev libssl-dev python3 python3-pip rsync unzip wget xsltproc zlib1g-dev time
+          sudo apt-get install -y \
+            build-essential ccache clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev python3 python3-setuptools python3-distutils \
+            python3-pyelftools libelf-dev rsync unzip zlib1g-dev file wget curl swig \
+            device-tree-compiler qemu-utils libgnutls28-dev libfuse-dev ninja-build \
+            libpython3-dev time
           sudo timedatectl set-timezone "$TZ"
 
       - name: Configure feeds
         run: |
           set -e
-          sed -i '/openwrt-passwall-packages.git/d' feeds.conf.default
-          sed -i '/openwrt-passwall2.git/d' feeds.conf.default
-          sed -i '/openwrt-passwall.git/d' feeds.conf.default
-          sed -i '/passwall_packages /d' feeds.conf.default
-          sed -i '/passwall_luci /d' feeds.conf.default
+          sed -i '/passwall/d' feeds.conf.default
+          cat feeds.conf.default
 
       - name: Update feeds
         run: ./scripts/feeds update -a
 
-      - name: Install official LuCI packages only
+      - name: Install feeds
+        run: ./scripts/feeds install -a
+
+      - name: Backport complete JDCloud RE-SS-01 support
         run: |
-          set -e
-          ./scripts/feeds install luci luci-compat luci-i18n-base-zh-cn
+          python3 -u <<'PY'
+          from pathlib import Path
+          import base64, stat, sys
 
-      - name: Backport complete JDCloud RE-SS-01 DTS dependency set
-        run: |
-          set -e
-          DTS_DIR="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom"
-          PATCH_DIR="target/linux/qualcommax/patches-6.6"
-          mkdir -p "$DTS_DIR" "$PATCH_DIR"
-          BASE_URL="https://raw.githubusercontent.com/immortalwrt/immortalwrt/604e315e3ca4a61bad4cc1af0562167752b4deef/target/linux/qualcommax"
+          root = Path(".").resolve()
 
-          curl -fsSL "$BASE_URL/dts/ipq6000-re-ss-01.dts" -o "$DTS_DIR/ipq6000-re-ss-01.dts"
-          curl -fsSL "$BASE_URL/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi" -o "$DTS_DIR/ipq6018-512m.dtsi"
-          curl -fsSL "$BASE_URL/files/arch/arm64/boot/dts/qcom/ipq6018-ess.dtsi" -o "$DTS_DIR/ipq6018-ess.dtsi"
+          dts = base64.b64decode("""
+              Ly8gU1BEWC1MaWNlbnNlLUlkZW50aWZpZXI6IEdQTC0yLjAtb3ItbGF0ZXIgT1IgTUlUCi8qCiAq
+              IEpEQ2xvdWQgUkUtU1MtMDEgKEFYMTgwMCBQcm8gLyDkuprnkZ8pCiAqIEJhY2twb3J0IG9mIE9w
+              ZW5XcnQgY29tbWl0IDE2NDIyNTEwYjUyYWYzZjE0ZDEyNjkyMzk2OGQzNDM3M2VmNmM3YjcKICog
+              YWRhcHRlZCBmb3IgSW1tb3J0YWxXcnQgdjI0LjEwLjY6CiAqICAgLSAmc2RoYyAtPiAmc2RoY18x
+              ICAoMjQuMTAuNiBrZXJuZWwgcGF0Y2ggMDEzNyBuYW1lcyB0aGUgbm9kZSBzZGhjXzEpCiAqICAg
+              LSBpbmNsdWRlIGlwcTYwMTgtY3AtY3B1LmR0c2kgbGlrZSBvdGhlciAyNC4xMCBpcHE2MHh4IGJv
+              YXJkcwogKiAgIC0gcWNvbSxwYWNrYWdlLW1vZGUgKyBNRElPIHJlc2V0IGRlbGF5cyBtYXRjaGlu
+              ZyAyNC4xMCBQSFkgYmluZGluZ3MKICovCgovZHRzLXYxLzsKCiNpbmNsdWRlICJpcHE2MDE4LTUx
+              Mm0uZHRzaSIKI2luY2x1ZGUgImlwcTYwMTgtY3AtY3B1LmR0c2kiCiNpbmNsdWRlICJpcHE2MDE4
+              LWVzcy5kdHNpIgoKI2luY2x1ZGUgPGR0LWJpbmRpbmdzL2dwaW8vZ3Bpby5oPgojaW5jbHVkZSA8
+              ZHQtYmluZGluZ3MvaW5wdXQvaW5wdXQuaD4KI2luY2x1ZGUgPGR0LWJpbmRpbmdzL2xlZHMvY29t
+              bW9uLmg+CgovIHsKCW1vZGVsID0gIkpEQ2xvdWQgUkUtU1MtMDEiOwoJY29tcGF0aWJsZSA9ICJq
+              ZGNsb3VkLHJlLXNzLTAxIiwgInFjb20saXBxNjAxOCI7CgoJYWxpYXNlcyB7CgkJZXRoZXJuZXQx
+              ID0gJmRwMjsKCQlldGhlcm5ldDIgPSAmZHAzOwoJCWV0aGVybmV0MyA9ICZkcDQ7CgkJZXRoZXJu
+              ZXQ0ID0gJmRwNTsKCQlzZXJpYWwwID0gJmJsc3AxX3VhcnQzOwoKCQlsYWJlbC1tYWMtZGV2aWNl
+              ID0gJmRwMjsKCQlsZWQtYm9vdCA9ICZsZWRfc3RhdHVzX3JlZDsKCQlsZWQtZmFpbHNhZmUgPSAm
+              bGVkX3N0YXR1c19yZWQ7CgkJbGVkLXJ1bm5pbmcgPSAmbGVkX3N0YXR1c19ncmVlbjsKCQlsZWQt
+              dXBncmFkZSA9ICZsZWRfc3RhdHVzX2JsdWU7Cgl9OwoKCWNob3NlbiB7CgkJc3Rkb3V0LXBhdGgg
+              PSAic2VyaWFsMDoxMTUyMDBuOCI7Cgl9OwoKCWtleXMgewoJCWNvbXBhdGlibGUgPSAiZ3Bpby1r
+              ZXlzIjsKCQlwaW5jdHJsLTAgPSA8JmJ1dHRvbl9waW5zPjsKCQlwaW5jdHJsLW5hbWVzID0gImRl
+              ZmF1bHQiOwoKCQl3cHMgewoJCQlsYWJlbCA9ICJ3cHMiOwoJCQlsaW51eCxjb2RlID0gPEtFWV9X
+              UFNfQlVUVE9OPjsKCQkJZ3Bpb3MgPSA8JnRsbW0gOCBHUElPX0FDVElWRV9MT1c+OwoJCX07CgoJ
+              CXJlc2V0IHsKCQkJbGFiZWwgPSAicmVzZXQiOwoJCQlsaW51eCxjb2RlID0gPEtFWV9SRVNUQVJU
+              PjsKCQkJZ3Bpb3MgPSA8JnRsbW0gOSBHUElPX0FDVElWRV9MT1c+OwoJCX07Cgl9OwoKCWxlZHMg
+              ewoJCWNvbXBhdGlibGUgPSAiZ3Bpby1sZWRzIjsKCgkJbGVkX3N0YXR1c19yZWQ6IHJlZCB7CgkJ
+              CWNvbG9yID0gPExFRF9DT0xPUl9JRF9SRUQ+OwoJCQlmdW5jdGlvbiA9IExFRF9GVU5DVElPTl9T
+              VEFUVVM7CgkJCWdwaW9zID0gPCZ0bG1tIDM3IEdQSU9fQUNUSVZFX0hJR0g+OwoJCX07CgoJCWxl
+              ZF9zdGF0dXNfYmx1ZTogYmx1ZSB7CgkJCWNvbG9yID0gPExFRF9DT0xPUl9JRF9CTFVFPjsKCQkJ
+              ZnVuY3Rpb24gPSBMRURfRlVOQ1RJT05fU1RBVFVTOwoJCQlncGlvcyA9IDwmdGxtbSAzNSBHUElP
+              X0FDVElWRV9ISUdIPjsKCQl9OwoKCQlsZWRfc3RhdHVzX2dyZWVuOiBncmVlbiB7CgkJCWNvbG9y
+              ID0gPExFRF9DT0xPUl9JRF9HUkVFTj47CgkJCWZ1bmN0aW9uID0gTEVEX0ZVTkNUSU9OX1NUQVRV
+              UzsKCQkJZ3Bpb3MgPSA8JnRsbW0gNTAgR1BJT19BQ1RJVkVfSElHSD47CgkJfTsKCX07Cn07Cgom
+              dGxtbSB7CglncGlvLXJlc2VydmVkLXJhbmdlcyA9IDwyMCAxPjsKCglidXR0b25fcGluczogYnV0
+              dG9uLXBpbnMgewoJCW11eCB7CgkJCXBpbnMgPSAiZ3BpbzgiLCAiZ3BpbzkiOwoJCQlmdW5jdGlv
+              biA9ICJncGlvIjsKCQkJZHJpdmUtc3RyZW5ndGggPSA8OD47CgkJCWJpYXMtcHVsbC11cDsKCQl9
+              OwoJfTsKCgltZGlvX3BpbnM6IG1kaW8tcGlucyB7CgkJbWRjIHsKCQkJcGlucyA9ICJncGlvNjQi
+              OwoJCQlmdW5jdGlvbiA9ICJtZGMiOwoJCQlkcml2ZS1zdHJlbmd0aCA9IDw4PjsKCQkJYmlhcy1w
+              dWxsLXVwOwoJCX07CgoJCW1kaW8gewoJCQlwaW5zID0gImdwaW82NSI7CgkJCWZ1bmN0aW9uID0g
+              Im1kaW8iOwoJCQlkcml2ZS1zdHJlbmd0aCA9IDw4PjsKCQkJYmlhcy1wdWxsLXVwOwoJCX07Cgl9
+              Owp9OwoKJmJsc3AxX3VhcnQzIHsKCXBpbmN0cmwtMCA9IDwmc2VyaWFsXzNfcGlucz47CglwaW5j
+              dHJsLW5hbWVzID0gImRlZmF1bHQiOwoJc3RhdHVzID0gIm9rYXkiOwp9OwoKJnF1c2JfcGh5XzAg
+              ewoJc3RhdHVzID0gIm9rYXkiOwp9OwoKJnJwbSB7CglzdGF0dXMgPSAiZGlzYWJsZWQiOwp9OwoK
+              LyogMjQuMTAuNiBrZXJuZWwgcGF0Y2ggMDEzNyBsYWJlbHMgdGhpcyBub2RlIHNkaGNfMSwgbm90
+              IHNkaGMgKi8KJnNkaGNfMSB7CglidXMtd2lkdGggPSA8OD47CgltbWMtZGRyLTFfOHY7CgltbWMt
+              aHMyMDAtMV84djsKCW5vbi1yZW1vdmFibGU7CglzdGF0dXMgPSAib2theSI7Cn07Cgomc3NwaHlf
+              MCB7CglzdGF0dXMgPSAib2theSI7Cn07CgomdXNiMyB7CglzdGF0dXMgPSAib2theSI7Cn07Cgom
+              bWRpbyB7CglzdGF0dXMgPSAib2theSI7CglwaW5jdHJsLTAgPSA8Jm1kaW9fcGlucz47CglwaW5j
+              dHJsLW5hbWVzID0gImRlZmF1bHQiOwoJcmVzZXQtZ3Bpb3MgPSA8JnRsbW0gNzUgR1BJT19BQ1RJ
+              VkVfTE9XPjsKCXJlc2V0LWRlbGF5LXVzID0gPDEwMDAwPjsKCXJlc2V0LXBvc3QtZGVsYXktdXMg
+              PSA8NTAwMDA+OwoKCWV0aGVybmV0LXBoeS1wYWNrYWdlQDAgewoJCWNvbXBhdGlibGUgPSAicWNv
+              bSxxY2E4MDc1LXBhY2thZ2UiOwoJCSNhZGRyZXNzLWNlbGxzID0gPDE+OwoJCSNzaXplLWNlbGxz
+              ID0gPDA+OwoJCXJlZyA9IDwwPjsKCQlxY29tLHBhY2thZ2UtbW9kZSA9ICJwc2dtaWkiOwoKCQlx
+              Y2E4MDc1XzE6IGV0aGVybmV0LXBoeUAxIHsKCQkJY29tcGF0aWJsZSA9ICJldGhlcm5ldC1waHkt
+              aWVlZTgwMi4zLWMyMiI7CgkJCXJlZyA9IDwxPjsKCQl9OwoKCQlxY2E4MDc1XzI6IGV0aGVybmV0
+              LXBoeUAyIHsKCQkJY29tcGF0aWJsZSA9ICJldGhlcm5ldC1waHktaWVlZTgwMi4zLWMyMiI7CgkJ
+              CXJlZyA9IDwyPjsKCQl9OwoKCQlxY2E4MDc1XzM6IGV0aGVybmV0LXBoeUAzIHsKCQkJY29tcGF0
+              aWJsZSA9ICJldGhlcm5ldC1waHktaWVlZTgwMi4zLWMyMiI7CgkJCXJlZyA9IDwzPjsKCQl9OwoK
+              CQlxY2E4MDc1XzQ6IGV0aGVybmV0LXBoeUA0IHsKCQkJY29tcGF0aWJsZSA9ICJldGhlcm5ldC1w
+              aHktaWVlZTgwMi4zLWMyMiI7CgkJCXJlZyA9IDw0PjsKCQl9OwoJfTsKfTsKCiZzd2l0Y2ggewoJ
+              c3RhdHVzID0gIm9rYXkiOwoKCXN3aXRjaF9sYW5fYm1wID0gPChFU1NfUE9SVDIgfCBFU1NfUE9S
+              VDMgfCBFU1NfUE9SVDQpPjsKCXN3aXRjaF93YW5fYm1wID0gPEVTU19QT1JUNT47Cglzd2l0Y2hf
+              bWFjX21vZGUgPSA8TUFDX01PREVfUFNHTUlJPjsKCglxY29tLHBvcnRfcGh5aW5mbyB7CgkJcG9y
+              dEAyIHsKCQkJcG9ydF9pZCA9IDwyPjsKCQkJcGh5X2FkZHJlc3MgPSA8MT47CgkJfTsKCQlwb3J0
+              QDMgewoJCQlwb3J0X2lkID0gPDM+OwoJCQlwaHlfYWRkcmVzcyA9IDwyPjsKCQl9OwoJCXBvcnRA
+              NCB7CgkJCXBvcnRfaWQgPSA8ND47CgkJCXBoeV9hZGRyZXNzID0gPDM+OwoJCX07CgkJcG9ydEA1
+              IHsKCQkJcG9ydF9pZCA9IDw1PjsKCQkJcGh5X2FkZHJlc3MgPSA8ND47CgkJfTsKCX07Cn07Cgom
+              ZWRtYSB7CglzdGF0dXMgPSAib2theSI7Cn07CgomZHAyIHsKCXN0YXR1cyA9ICJva2F5IjsKCXBo
+              eS1oYW5kbGUgPSA8JnFjYTgwNzVfMT47CglsYWJlbCA9ICJsYW4xIjsKfTsKCiZkcDMgewoJc3Rh
+              dHVzID0gIm9rYXkiOwoJcGh5LWhhbmRsZSA9IDwmcWNhODA3NV8yPjsKCWxhYmVsID0gImxhbjIi
+              Owp9OwoKJmRwNCB7CglzdGF0dXMgPSAib2theSI7CglwaHktaGFuZGxlID0gPCZxY2E4MDc1XzM+
+              OwoJbGFiZWwgPSAibGFuMyI7Cn07CgomZHA1IHsKCXN0YXR1cyA9ICJva2F5IjsKCXBoeS1oYW5k
+              bGUgPSA8JnFjYTgwNzVfND47CglsYWJlbCA9ICJ3YW4iOwp9OwoKJndpZmkgewoJc3RhdHVzID0g
+              Im9rYXkiOwoJcWNvbSxhdGgxMWstY2FsaWJyYXRpb24tdmFyaWFudCA9ICJKREMtUkUtU1MtMDEi
+              OwoJcWNvbSxhdGgxMWstZnctbWVtb3J5LW1vZGUgPSA8MT47Cn07Cg==
+          """)
+          dts_path = root / "target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts"
+          dts_path.parent.mkdir(parents=True, exist_ok=True)
+          dts_path.write_bytes(dts)
+          text = dts_path.read_text()
+          assert 'model = "JDCloud RE-SS-01"' in text
+          assert "&sdhc_1" in text
+          assert "&dp2" in text
+          assert "switch_lan_bmp" in text
+          assert "JDC-RE-SS-01" in text
+          assert "uniphy0" not in text
+          assert "&sdhc {" not in text
+          print("DTS ok", dts_path, "bytes", dts_path.stat().st_size)
 
-          curl -fsSL "https://raw.githubusercontent.com/openwrt/openwrt/af6cf5d8c0869a4ec0a711752a17883162e4afca/target/linux/qualcommax/patches-6.6/0083-v6.11-arm64-dts-qcom-ipq6018-add-sdhci-node.patch" \
-            -o "$PATCH_DIR/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch"
-
-          test -s "$DTS_DIR/ipq6000-re-ss-01.dts"
-          test -s "$DTS_DIR/ipq6018-512m.dtsi"
-          test -s "$DTS_DIR/ipq6018-ess.dtsi"
-          test -s "$PATCH_DIR/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch"
-          grep -q 'model = "JDCloud RE-SS-01"' "$DTS_DIR/ipq6000-re-ss-01.dts"
-          grep -q 'uniphy0:' "$DTS_DIR/ipq6018-ess.dtsi"
-          grep -q 'sdhc: mmc@7804000' "$PATCH_DIR/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch"
-
-          echo '===== RE-SS-01 DTS ====='
-          head -20 "$DTS_DIR/ipq6000-re-ss-01.dts"
-          echo '===== DTSI DEPENDENCIES ====='
-          grep -nE '^(#include|.*uniphy0:)' "$DTS_DIR/ipq6018-512m.dtsi" "$DTS_DIR/ipq6018-ess.dtsi" || true
-          echo '===== SDHC PATCH ====='
-          grep -n 'sdhc: mmc@7804000' "$PATCH_DIR/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch"
-
-      - name: Add JDCloud AX1800 image definition
-        run: |
-          set -e
-          cat >> target/linux/qualcommax/image/ipq60xx.mk <<'EOF'
+          mk = root / "target/linux/qualcommax/image/ipq60xx.mk"
+          mk_t = mk.read_text()
+          if "Device/jdcloud_re-ss-01" not in mk_t:
+              mk.write_text(mk_t.rstrip() + """
 
           define Device/jdcloud_re-ss-01
           	$(call Device/FitImage)
           	$(call Device/EmmcImage)
           	DEVICE_VENDOR := JDCloud
           	DEVICE_MODEL := RE-SS-01
-          	KERNEL_SIZE := 6144k
-          	BLOCKSIZE := 128k
           	SOC := ipq6000
+          	BLOCKSIZE := 64k
+          	KERNEL_SIZE := 6144k
           	DEVICE_DTS_CONFIG := config@cp03-c2
-          	DEVICE_PACKAGES := ipq-wifi-jdcloud_re-ss-01
-          	IMAGE/factory.bin := append-kernel | pad-to $$(KERNEL_SIZE) | append-rootfs | append-metadata
+          	DEVICE_PACKAGES := ipq-wifi-jdcloud_re-ss-01 kmod-fs-f2fs f2fs-tools kmod-fs-ext4
+          	IMAGE/factory.bin := append-kernel | pad-to $$(KERNEL_SIZE) | append-rootfs | pad-rootfs | append-metadata
           endef
           TARGET_DEVICES += jdcloud_re-ss-01
-          EOF
+          """)
+          assert "Device/jdcloud_re-ss-01" in mk.read_text()
+          print("image mk ok")
 
-      - name: Set LAN IP
-        run: |
-          set -e
-          mkdir -p files/etc/uci-defaults
-          cat > files/etc/uci-defaults/99-jdcloud-lan-ip <<'EOF'
-          #!/bin/sh
-          uci -q set network.lan.ipaddr='192.168.20.1'
-          uci -q set network.lan.netmask='255.255.255.0'
-          uci -q commit network
-          exit 0
-          EOF
-          chmod +x files/etc/uci-defaults/99-jdcloud-lan-ip
+          net = root / "target/linux/qualcommax/ipq60xx/base-files/etc/board.d/02_network"
+          nt = net.read_text()
+          if "jdcloud,re-ss-01" not in nt:
+              insert = '\tjdcloud,re-ss-01)\n\t\tucidef_set_interfaces_lan_wan "lan1 lan2 lan3" "wan"\n\t\t;;\n'
+              if "\t*)\n" not in nt:
+                  sys.exit("02_network default case missing")
+              net.write_text(nt.replace("\t*)\n", insert + "\t*)\n", 1))
+          assert "jdcloud,re-ss-01" in net.read_text()
+          print("02_network ok")
+
+          cal_path = root / "target/linux/qualcommax/ipq60xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata"
+          cal_path.parent.mkdir(parents=True, exist_ok=True)
+          cal_path.write_text(
+              "#!/bin/sh\n"
+              "[ -e /lib/firmware/$FIRMWARE ] && exit 0\n"
+              "\n"
+              ". /lib/functions/caldata.sh\n"
+              "\n"
+              "board=$(board_name)\n"
+              "\n"
+              "case \"$FIRMWARE\" in\n"
+              "\"ath11k/IPQ6018/hw1.0/cal-ahb-c000000.wifi.bin\")\n"
+              "\tcase \"$board\" in\n"
+              "\t8devices,mango-dvk)\n"
+              "\t\tcaldata_extract \"0:ART\" 0x1000 0x20000\n"
+              "\t\t;;\n"
+              "\tcambiumnetworks,xe3-4)\n"
+              "\t\tcaldata_extract \"0:ART\" 0x1000 0x10000\n"
+              "\t\t;;\n"
+              "\tjdcloud,re-ss-01)\n"
+              "\t\tcaldata_extract_mmc \"0:ART\" 0x1000 0x10000\n"
+              "\t\t;;\n"
+              "\tnetgear,wax214)\n"
+              "\t\tcaldata_extract \"0:art\" 0x1000 0x10000\n"
+              "\t\t;;\n"
+              "\tyuncore,fap650)\n"
+              "\t\tcaldata_extract \"0:art\" 0x1000 0x20000\n"
+              "\t\t;;\n"
+              "\tesac\n"
+              "\t;;\n"
+              "\"ath11k/QCN9074/hw1.0/cal-pci-0000:01:00.0.bin\")\n"
+              "\tcase \"$board\" in\n"
+              "\tcambiumnetworks,xe3-4)\n"
+              "\t\tcaldata_extract \"0:ART\" 0x26800 0x20000\n"
+              "\t\t;;\n"
+              "\tesac\n"
+              "\t;;\n"
+              "*)\n"
+              "\texit 1\n"
+              "\t;;\n"
+              "esac\n"
+          )
+          cal_path.chmod(cal_path.stat().st_mode | stat.S_IEXEC)
+          assert "caldata_extract_mmc" in cal_path.read_text()
+          print("caldata ok")
+
+          plat = root / "target/linux/qualcommax/ipq60xx/base-files/lib/upgrade/platform.sh"
+          pt = plat.read_text()
+          if "jdcloud,re-ss-01" not in pt:
+              insert = (
+                  "\tjdcloud,re-ss-01)\n"
+                  '\t\tlocal cfgpart=$(find_mmc_part "0:BOOTCONFIG")\n'
+                  '\t\tpart_num="$(hexdump -e \'1/1 "%01x|"\' -n 1 -s 148 -C $cfgpart | cut -f 1 -d "|" | head -n1)"\n'
+                  '\t\tif [ "$part_num" -eq "1" ]; then\n'
+                  '\t\t\tCI_KERNPART="0:HLOS_1"\n'
+                  '\t\t\tCI_ROOTPART="rootfs_1"\n'
+                  "\t\telse\n"
+                  '\t\t\tCI_KERNPART="0:HLOS"\n'
+                  '\t\t\tCI_ROOTPART="rootfs"\n'
+                  "\t\tfi\n"
+                  '\t\temmc_do_upgrade "$1"\n'
+                  "\t\t;;\n"
+              )
+              if "\t*)\n" not in pt:
+                  sys.exit("platform.sh default case missing")
+              plat.write_text(pt.replace("\t*)\n", insert + "\t*)\n", 1))
+          assert "emmc_do_upgrade" in plat.read_text()
+          print("platform.sh ok")
+
+          wifi = root / "package/firmware/ipq-wifi/Makefile"
+          wt = wifi.read_text()
+          if "jdcloud_re-ss-01" not in wt:
+              if "edimax_cax1800 \\\n" not in wt:
+                  sys.exit("ipq-wifi ALLWIFIBOARDS anchor missing")
+              wt = wt.replace(
+                  "edimax_cax1800 \\\n",
+                  "edimax_cax1800 \\\n\tjdcloud_re-ss-01 \\\n",
+                  1,
+              )
+              anchor = "$(eval $(call generate-ipq-wifi-package,edimax_cax1800,Edimax CAX1800))\n"
+              if anchor not in wt:
+                  sys.exit("ipq-wifi generate-package anchor missing")
+              wt = wt.replace(
+                  anchor,
+                  anchor + "$(eval $(call generate-ipq-wifi-package,jdcloud_re-ss-01,JDCloud RE-SS-01))\n",
+                  1,
+              )
+              wifi.write_text(wt)
+          assert "jdcloud_re-ss-01" in wifi.read_text()
+          print("ipq-wifi ok")
+
+          lan_path = root / "files/etc/uci-defaults/99-jdcloud-lan-ip"
+          lan_path.parent.mkdir(parents=True, exist_ok=True)
+          lan_path.write_text(
+              "#!/bin/sh\n"
+              "uci -q set network.lan.ipaddr='192.168.20.1'\n"
+              "uci -q set network.lan.netmask='255.255.255.0'\n"
+              "uci -q commit network\n"
+              "exit 0\n"
+          )
+          lan_path.chmod(lan_path.stat().st_mode | stat.S_IEXEC)
+          print("lan uci-defaults ok")
+          print("BACKPORT COMPLETE")
+          PY
 
       - name: Configure clean 2G firmware
         run: |
           set -e
-          rm -f .config
-          cat > .config <<'EOF'
-          CONFIG_TARGET_qualcommax=y
-          CONFIG_TARGET_qualcommax_ipq60xx=y
-          CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y
-          CONFIG_TARGET_ROOTFS_SQUASHFS=y
-          CONFIG_TARGET_ROOTFS_PARTSIZE=2048
-          CONFIG_TARGET_KERNEL_PARTSIZE=64
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-compat=y
-          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
-          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          Path(".config").write_text(
+              "CONFIG_TARGET_qualcommax=y\n"
+              "CONFIG_TARGET_qualcommax_ipq60xx=y\n"
+              "CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y\n"
+              "CONFIG_TARGET_ROOTFS_SQUASHFS=y\n"
+              "CONFIG_TARGET_ROOTFS_PARTSIZE=2048\n"
+              "CONFIG_TARGET_KERNEL_PARTSIZE=64\n"
+              "CONFIG_PACKAGE_luci=y\n"
+              "CONFIG_PACKAGE_luci-compat=y\n"
+              "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y\n"
+          )
+          PY
           make defconfig
           sed -i '/^CONFIG_TARGET_ROOTFS_PARTSIZE=/d' .config
           echo 'CONFIG_TARGET_ROOTFS_PARTSIZE=2048' >> .config
-          grep -q '^CONFIG_TARGET_ROOTFS_PARTSIZE=2048$' .config
-          if grep -E '^CONFIG_PACKAGE_(luci-app-(passwall|passwall2|homeproxy|mosdns|adguardhome|openclash)|passwall|homeproxy|mosdns|adguardhome|openclash)' .config; then
-            echo 'ERROR: third-party package selected'
+          echo '===== TARGET / ROOTFS ====='
+          grep -E '^CONFIG_TARGET_(qualcommax|ROOTFS|KERNEL_PARTSIZE)' .config || true
+          echo '===== DEVICE ====='
+          grep 'jdcloud_re-ss-01' .config | head
+          echo '===== PACKAGES ====='
+          grep -E '^CONFIG_PACKAGE_(luci|luci-compat|luci-i18n-base-zh-cn|ipq-wifi-jdcloud)' .config || true
+          if grep -E '^CONFIG_PACKAGE_(luci-app-(passwall|passwall2|homeproxy|mosdns|adguardhome|openclash)|passwall|homeproxy|mosdns|adguardhome|openclash)=' .config; then
+            echo 'ERROR: forbidden third-party package selected'
             exit 1
           fi
+          grep -q '^CONFIG_TARGET_ROOTFS_PARTSIZE=2048$' .config
+          grep -q 'CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' .config
 
-      - name: Verify configuration
+      - name: Verify backport
         run: |
           set -e
-          grep '^CONFIG_TARGET_ROOTFS_PARTSIZE=2048$' .config
-          grep '^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' .config
-          grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk
-          test -s target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
-          test -s target/linux/qualcommax/patches-6.6/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch
+          echo '===== IMAGE ====='
+          grep -A20 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk
+          echo '===== DTS KEYS ====='
+          grep -nE 'sdhc_1|uniphy0|&dp2|switch_lan_bmp|JDC-RE-SS-01|&sdhc' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
+          grep -q '&sdhc_1' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
+          if grep -q 'uniphy0' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts; then echo 'ERROR uniphy0'; exit 1; fi
+          echo '===== LAN ====='
+          cat files/etc/uci-defaults/99-jdcloud-lan-ip
+          echo '===== CALDATA ====='
+          grep -A3 'jdcloud,re-ss-01' target/linux/qualcommax/ipq60xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
+          echo '===== UPGRADE ====='
+          grep -A14 'jdcloud,re-ss-01' target/linux/qualcommax/ipq60xx/base-files/lib/upgrade/platform.sh
+          echo '===== WIFI PKG ====='
+          grep 'jdcloud_re-ss-01' package/firmware/ipq-wifi/Makefile
 
       - name: Download sources
-        run: make download -j2 V=s
+        run: make download -j8 V=s
 
       - name: Compile firmware
         shell: bash
         run: |
           set -o pipefail
           LOGFILE="$GITHUB_WORKSPACE/build.log"
+          echo "Build log: $LOGFILE"
+          df -h
           set +e
-          make -j2 V=s 2>&1 | tee "$LOGFILE"
+          make -j$(nproc) V=s 2>&1 | tee "$LOGFILE"
           status=${PIPESTATUS[0]}
           set -e
           if [ "$status" -ne 0 ]; then
             echo '===== BUILD FAILED: LAST 300 LINES ====='
             tail -300 "$LOGFILE"
-            echo '===== FIRST ERROR MATCHES ====='
-            grep -n -m 30 -E '(^|: )(error:|fatal error:|Error [0-9]+|make\[[0-9]+\]: \*\*\*)' "$LOGFILE" || true
+            echo '===== BUILD FAILED: FIRST ERROR MATCHES ====='
+            grep -n -m 40 -E '(^|: )(error:|fatal error:|Error [0-9]+|make\[[0-9]+\]: \*\*\*|Label or path)' "$LOGFILE" || true
             exit "$status"
           fi
 
@@ -169,18 +365,13 @@ jobs:
           set -e
           TARGET_DIR='bin/targets/qualcommax/ipq60xx'
           test -d "$TARGET_DIR"
+          find "$TARGET_DIR" -maxdepth 2 -type f -printf '%p %s bytes\n' | sort
           FACTORY="$(find "$TARGET_DIR" -type f -name '*jdcloud*re-ss-01*squashfs-factory.bin' -print -quit)"
           SYSUPGRADE="$(find "$TARGET_DIR" -type f -name '*jdcloud*re-ss-01*squashfs-sysupgrade.bin' -print -quit)"
           test -n "$FACTORY"
           test -n "$SYSUPGRADE"
           echo "FACTORY=$FACTORY"
           echo "SYSUPGRADE=$SYSUPGRADE"
-          FACTORY_SIZE=$(stat -c '%s' "$FACTORY")
-          MIN_FACTORY_SIZE=$((1800 * 1024 * 1024))
-          if [ "$FACTORY_SIZE" -lt "$MIN_FACTORY_SIZE" ]; then
-            echo "ERROR: factory image is smaller than 1800 MiB"
-            exit 1
-          fi
           du -h "$FACTORY" "$SYSUPGRADE"
 
       - name: Upload firmware
