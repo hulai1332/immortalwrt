@@ -32,7 +32,7 @@ jobs:
             wget xsltproc zlib1g-dev time
           sudo timedatectl set-timezone "$TZ"
 
-      - name: Configure clean feeds
+      - name: Configure feeds
         run: |
           set -e
           sed -i '/openwrt-passwall-packages.git/d' feeds.conf.default
@@ -44,29 +44,30 @@ jobs:
       - name: Update feeds
         run: ./scripts/feeds update -a
 
-      - name: Install feeds
-        run: ./scripts/feeds install -a
-
-      - name: Patch JDCloud AX1800 factory image definition
+      - name: Install only required LuCI feed packages
         run: |
           set -e
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('target/linux/qualcommax/image/ipq60xx.mk')
-          s = p.read_text()
-          marker = 'define Device/jdcloud_re-ss-01'
-          start = s.find(marker)
-          if start < 0:
-              raise SystemExit('jdcloud_re-ss-01 device definition not found')
-          end = s.find('endef', start)
-          if end < 0:
-              raise SystemExit('jdcloud_re-ss-01 endef not found')
-          block = s[start:end]
-          if 'IMAGES += factory.bin' not in block:
-              block = block.rstrip() + '\n\tIMAGES += factory.bin\n\tIMAGE/factory.bin := append-kernel | pad-to $$(KERNEL_SIZE) | append-rootfs | append-metadata\n'
-              s = s[:start] + block + s[end:]
-              p.write_text(s)
-          PY
+          ./scripts/feeds install luci luci-compat luci-i18n-base-zh-cn
+
+      - name: Add JDCloud AX1800 factory image definition
+        run: |
+          set -e
+          cat >> target/linux/qualcommax/image/ipq60xx.mk <<'EOF'
+
+          define Device/jdcloud_re-ss-01
+          	$(call Device/FitImage)
+          	DEVICE_VENDOR := JDCloud
+          	DEVICE_MODEL := RE-SS-01
+          	SOC := ipq6000
+          	BLOCKSIZE := 64k
+          	KERNEL_SIZE := 6144k
+          	DEVICE_DTS_CONFIG := config@cp03-c2
+          	DEVICE_PACKAGES := ipq-wifi-jdcloud_re-ss-01
+          	IMAGES += factory.bin
+          	IMAGE/factory.bin := append-kernel | pad-to $$(KERNEL_SIZE) | append-rootfs | append-metadata
+          endef
+          TARGET_DEVICES += jdcloud_re-ss-01
+          EOF
 
       - name: Set LAN IP to 192.168.20.1
         run: |
@@ -93,14 +94,19 @@ jobs:
           CONFIG_TARGET_ROOTFS_PARTSIZE=2048
           CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_luci-compat=y
-          CONFIG_LUCI_LANG_zh_Hans=y
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
           EOF
           make defconfig
 
           echo '===== TARGET / ROOTFS ====='
           grep -E '^CONFIG_TARGET_(qualcommax|ipq60xx|ROOTFS)' .config
-          echo '===== OPTIONAL PLUGINS ====='
-          grep -E '^CONFIG_PACKAGE_(luci-app|block-mount|luci-theme-argon|passwall|homeproxy|mosdns|adguard)' .config || true
+          echo '===== CLEAN PACKAGE CONFIG ====='
+          grep -E '^CONFIG_PACKAGE_(luci|luci-i18n-base-zh-cn)' .config
+          echo '===== THIRD-PARTY PLUGINS ====='
+          if grep -E '^CONFIG_PACKAGE_(luci-app-|passwall|homeproxy|mosdns|adguard|openclash)' .config; then
+            echo 'ERROR: unexpected third-party LuCI/plugin package selected'
+            exit 1
+          fi
 
       - name: Verify image definition and clean config
         run: |
