@@ -1,4 +1,4 @@
-name: Build ImmortalWrt for JDCloud AX1800 Pro
+name: Build ImmortalWrt 24.10.6 for JDCloud AX1800 Pro
 
 on:
   workflow_dispatch:
@@ -14,9 +14,11 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout ImmortalWrt source
+      - name: Checkout ImmortalWrt 24.10.6
         uses: actions/checkout@v4
         with:
+          repository: immortalwrt/immortalwrt
+          ref: v24.10.6
           fetch-depth: 1
 
       - name: Install build dependencies
@@ -30,10 +32,9 @@ jobs:
             wget xsltproc zlib1g-dev time
           sudo timedatectl set-timezone "$TZ"
 
-      - name: Configure feeds
+      - name: Configure clean feeds
         run: |
           set -e
-          # No third-party feeds: this is a clean firmware build.
           sed -i '/openwrt-passwall-packages.git/d' feeds.conf.default
           sed -i '/openwrt-passwall2.git/d' feeds.conf.default
           sed -i '/openwrt-passwall.git/d' feeds.conf.default
@@ -45,6 +46,27 @@ jobs:
 
       - name: Install feeds
         run: ./scripts/feeds install -a
+
+      - name: Patch JDCloud AX1800 factory image definition
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('target/linux/qualcommax/image/ipq60xx.mk')
+          s = p.read_text()
+          marker = 'define Device/jdcloud_re-ss-01'
+          start = s.find(marker)
+          if start < 0:
+              raise SystemExit('jdcloud_re-ss-01 device definition not found')
+          end = s.find('endef', start)
+          if end < 0:
+              raise SystemExit('jdcloud_re-ss-01 endef not found')
+          block = s[start:end]
+          if 'IMAGES += factory.bin' not in block:
+              block = block.rstrip() + '\n\tIMAGES += factory.bin\n\tIMAGE/factory.bin := append-kernel | pad-to $$(KERNEL_SIZE) | append-rootfs | append-metadata\n'
+              s = s[:start] + block + s[end:]
+              p.write_text(s)
+          PY
 
       - name: Set LAN IP to 192.168.20.1
         run: |
@@ -59,7 +81,7 @@ jobs:
           EOF
           chmod +x files/etc/uci-defaults/99-jdcloud-lan-ip
 
-      - name: Configure clean JDCloud AX1800 Pro 2G build
+      - name: Configure clean 2G firmware
         run: |
           set -e
           rm -f .config
@@ -73,23 +95,24 @@ jobs:
           CONFIG_PACKAGE_luci-compat=y
           CONFIG_LUCI_LANG_zh_Hans=y
           EOF
-
           make defconfig
 
-          echo '===== TARGET ====='
+          echo '===== TARGET / ROOTFS ====='
           grep -E '^CONFIG_TARGET_(qualcommax|ipq60xx|ROOTFS)' .config
-          echo '===== PREINSTALLED OPTIONAL PLUGINS ====='
-          grep -E '^CONFIG_PACKAGE_(luci-app|block-mount|luci-theme-argon)' .config || true
+          echo '===== OPTIONAL PLUGINS ====='
+          grep -E '^CONFIG_PACKAGE_(luci-app|block-mount|luci-theme-argon|passwall|homeproxy|mosdns|adguard)' .config || true
 
-      - name: Verify clean image definition
+      - name: Verify image definition and clean config
         run: |
           set -e
           echo '===== JDCloud DEVICE DEFINITION ====='
           grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk
-          echo '===== 2G ROOTFS CONFIG ====='
+          echo '===== 2G ====='
           grep '^CONFIG_TARGET_ROOTFS_PARTSIZE=2048$' .config
           echo '===== LAN DEFAULT ====='
           cat files/etc/uci-defaults/99-jdcloud-lan-ip
+          echo '===== FACTORY RULE ====='
+          grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk | grep 'IMAGE/factory.bin'
 
       - name: Download sources
         run: make download -j2 V=s
@@ -114,7 +137,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ImmortalWrt-JDCloud-AX1800-Pro-2G-Clean
+          name: ImmortalWrt-24.10.6-JDCloud-AX1800-Pro-2G-Clean
           path: bin/targets/qualcommax/ipq60xx/
           if-no-files-found: error
           retention-days: 7
