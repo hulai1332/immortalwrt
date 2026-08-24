@@ -47,16 +47,89 @@ jobs:
           set -e
           ./scripts/feeds install luci luci-compat luci-i18n-base-zh-cn
 
-      - name: Backport JDCloud RE-SS-01 DTS for 24.10.6
+      - name: Backport complete JDCloud RE-SS-01 DTS dependency set for 24.10.6
         run: |
           set -e
-          mkdir -p target/linux/qualcommax/files/arch/arm64/boot/dts/qcom
-          curl -fsSL https://raw.githubusercontent.com/immortalwrt/immortalwrt/604e315e3ca4a61bad4cc1af0562167752b4deef/target/linux/qualcommax/dts/ipq6000-re-ss-01.dts \
-            -o target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
-          test -s target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
-          grep -q 'model = "JDCloud RE-SS-01"' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
-          echo '===== BACKPORTED DTS ====='
-          head -20 target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
+          DTS_DIR="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom"
+          PATCH_DIR="target/linux/qualcommax/patches-6.6"
+          mkdir -p "$DTS_DIR" "$PATCH_DIR"
+
+          BASE_URL="https://raw.githubusercontent.com/immortalwrt/immortalwrt/604e315e3ca4a61bad4cc1af0562167752b4deef/target/linux/qualcommax"
+
+          # RE-SS-01 DTS and the two DTSI files it directly includes.
+          curl -fsSL "$BASE_URL/dts/ipq6000-re-ss-01.dts" \
+            -o "$DTS_DIR/ipq6000-re-ss-01.dts"
+          curl -fsSL "$BASE_URL/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi" \
+            -o "$DTS_DIR/ipq6018-512m.dtsi"
+          curl -fsSL "$BASE_URL/files/arch/arm64/boot/dts/qcom/ipq6018-ess.dtsi" \
+            -o "$DTS_DIR/ipq6018-ess.dtsi"
+
+          test -s "$DTS_DIR/ipq6000-re-ss-01.dts"
+          test -s "$DTS_DIR/ipq6018-512m.dtsi"
+          test -s "$DTS_DIR/ipq6018-ess.dtsi"
+          grep -q 'model = "JDCloud RE-SS-01"' "$DTS_DIR/ipq6000-re-ss-01.dts"
+          grep -q 'uniphy0:' "$DTS_DIR/ipq6018-ess.dtsi"
+
+          # Linux 6.6 used by ImmortalWrt 24.10.6 does not expose the
+          # ipq6018 SDHCI node as &sdhc. RE-SS-01 uses eMMC, so backport the
+          # upstream SDHCI node instead of deleting &sdhc from the board DTS.
+          cat > "$PATCH_DIR/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch" <<'EOF'
+From 5db216f6e1f85394e79dca74ceceb83b2f8566b5 Mon Sep 17 00:00:00 2001
+From: Chukun Pan <amadeus@jmu.edu.cn>
+Date: Thu, 20 Jun 2024 23:01:22 +0800
+Subject: [PATCH] arm64: dts: qcom: ipq6018: add sdhci node
+
+Add node to support mmc controller inside of IPQ6018.
+This controller supports both eMMC and SD cards.
+
+Tested with:
+ eMMC (HS200)
+ SD Card (SDR50/SDR104)
+
+Signed-off-by: Chukun Pan <amadeus@jmu.edu.cn>
+Signed-off-by: Bjorn Andersson <andersson@kernel.org>
+---
+ arch/arm64/boot/dts/qcom/ipq6018.dtsi | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+--- a/arch/arm64/boot/dts/qcom/ipq6018.dtsi
++++ b/arch/arm64/boot/dts/qcom/ipq6018.dtsi
+@@ -441,6 +441,25 @@ dwc_1: usb@7000000 {
+ 			};
+ 		};
+ 
++		sdhc: mmc@7804000 {
++			compatible = "qcom,ipq6018-sdhci", "qcom,sdhci-msm-v5";
++			reg = <0x0 0x7804000 0x0 0x1000>,
++			      <0x0 0x7805000 0x0 0x1000>;
++			reg-names = "hc", "cqhci";
++
++			interrupts = <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 138 IRQ_TYPE_LEVEL_HIGH>;
++			interrupt-names = "hc_irq", "pwr_irq";
++
++			clocks = <&gcc GCC_SDCC1_AHB_CLK>,
++				 <&gcc GCC_SDCC1_APPS_CLK>,
++				 <&xo>;
++			clock-names = "iface", "core", "xo";
++			resets = <&gcc GCC_SDCC1_BCR>;
++			max-frequency = <192000000>;
++			status = "disabled";
++		};
++
+ 		blsp_dma: dma-controller@7884000 {
+ 			compatible = "qcom,bam-v1.7.0";
+ 			reg = <0x0 0x07884000 0x0 0x2b000>;
+-- 
+2.43.0
+EOF
+
+          echo '===== RE-SS-01 DTS ====='
+          head -12 "$DTS_DIR/ipq6000-re-ss-01.dts"
+          echo '===== RE-SS-01 DTSI DEPENDENCIES ====='
+          grep -nE '^(#include|.*uniphy0:)' "$DTS_DIR/ipq6018-512m.dtsi" "$DTS_DIR/ipq6018-ess.dtsi" || true
+          echo '===== SDHC BACKPORT PATCH ====='
+          grep -A22 '^+.*sdhc:' "$PATCH_DIR/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch"
 
       - name: Add JDCloud AX1800 eMMC factory image definition
         run: |
@@ -120,7 +193,7 @@ jobs:
           fi
           grep -q '^CONFIG_TARGET_ROOTFS_PARTSIZE=2048$' .config
 
-      - name: Verify image definition and clean config
+      - name: Verify image definition, DTS dependencies and clean config
         run: |
           set -e
           echo '===== JDCloud DEVICE DEFINITION ====='
@@ -129,8 +202,14 @@ jobs:
           grep '^CONFIG_TARGET_ROOTFS_PARTSIZE=2048$' .config
           echo '===== LAN DEFAULT ====='
           cat files/etc/uci-defaults/99-jdcloud-lan-ip
-          echo '===== DTS ====='
-          test -f target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
+          echo '===== DTS FILES ====='
+          DTS_DIR='target/linux/qualcommax/files/arch/arm64/boot/dts/qcom'
+          test -s "$DTS_DIR/ipq6000-re-ss-01.dts"
+          test -s "$DTS_DIR/ipq6018-512m.dtsi"
+          test -s "$DTS_DIR/ipq6018-ess.dtsi"
+          grep -q 'uniphy0:' "$DTS_DIR/ipq6018-ess.dtsi"
+          echo '===== SDHC PATCH ====='
+          test -s target/linux/qualcommax/patches-6.6/9999-arm64-dts-qcom-ipq6018-add-sdhci-node.patch
           echo '===== FACTORY RULE ====='
           grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk | grep 'IMAGE/factory.bin'
           echo '===== EMMC IMAGE ====='
