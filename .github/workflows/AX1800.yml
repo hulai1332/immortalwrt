@@ -87,6 +87,10 @@ jobs:
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
           EOF
           make defconfig
+          # v24.10.6 defconfig drops this image-size override when it is not
+          # exposed as a menu option. Restore it after dependency resolution.
+          sed -i '/^CONFIG_TARGET_ROOTFS_PARTSIZE=/d' .config
+          echo 'CONFIG_TARGET_ROOTFS_PARTSIZE=2048' >> .config
           echo '===== TARGET / ROOTFS ====='
           grep -E '^CONFIG_TARGET_(qualcommax|ipq60xx|ROOTFS|KERNEL_PARTSIZE)' .config
           echo '===== CLEAN PACKAGE CONFIG ====='
