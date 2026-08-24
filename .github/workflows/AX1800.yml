@@ -8,6 +8,8 @@ permissions:
 
 env:
   TZ: Asia/Shanghai
+  CFLAGS: "-Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-pointer-types"
+  CXXFLAGS: "-Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-pointer-types"
 
 jobs:
   build:
@@ -143,6 +145,8 @@ jobs:
           set -o pipefail
           LOGFILE="$GITHUB_WORKSPACE/build.log"
           echo "Build log: $LOGFILE"
+          echo "CFLAGS=$CFLAGS"
+          echo "CXXFLAGS=$CXXFLAGS"
           set +e
           make -j2 V=s 2>&1 | tee "$LOGFILE"
           status=${PIPESTATUS[0]}
@@ -151,7 +155,7 @@ jobs:
             echo '===== BUILD FAILED: LAST 300 LINES ====='
             tail -300 "$LOGFILE"
             echo '===== BUILD FAILED: FIRST ERROR MATCHES ====='
-            grep -n -m 20 -E '(^|: )(error:|fatal error:|Error [0-9]+|make\[[0-9]+\]: \*\*\*)' "$LOGFILE" || true
+            grep -n -m 30 -E '(^|: )(error:|fatal error:|Error [0-9]+|make\[[0-9]+\]: \*\*\*)' "$LOGFILE" || true
             exit "$status"
           fi
 
