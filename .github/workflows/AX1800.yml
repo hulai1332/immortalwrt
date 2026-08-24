@@ -45,6 +45,17 @@ jobs:
           set -e
           ./scripts/feeds install luci luci-compat luci-i18n-base-zh-cn
 
+      - name: Backport JDCloud RE-SS-01 DTS for 24.10.6
+        run: |
+          set -e
+          mkdir -p target/linux/qualcommax/files/arch/arm64/boot/dts/qcom
+          curl -fsSL https://raw.githubusercontent.com/immortalwrt/immortalwrt/604e315e3ca4a61bad4cc1af0562167752b4deef/target/linux/qualcommax/dts/ipq6000-re-ss-01.dts \
+            -o target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
+          test -s target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
+          grep -q 'model = "JDCloud RE-SS-01"' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
+          echo '===== BACKPORTED DTS ====='
+          head -20 target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
+
       - name: Add JDCloud AX1800 eMMC factory image definition
         run: |
           set -e
@@ -116,6 +127,8 @@ jobs:
           grep '^CONFIG_TARGET_ROOTFS_PARTSIZE=2048$' .config
           echo '===== LAN DEFAULT ====='
           cat files/etc/uci-defaults/99-jdcloud-lan-ip
+          echo '===== DTS ====='
+          test -f target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-re-ss-01.dts
           echo '===== FACTORY RULE ====='
           grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk | grep 'IMAGE/factory.bin'
           echo '===== EMMC IMAGE ====='
