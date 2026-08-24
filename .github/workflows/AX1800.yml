@@ -19,6 +19,7 @@ jobs:
           repository: immortalwrt/immortalwrt
           ref: v24.10.6
           fetch-depth: 1
+
       - name: Install build dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -26,6 +27,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential ccache curl file gawk gettext git libncurses-dev libssl-dev python3 python3-pip rsync unzip wget xsltproc zlib1g-dev time
           sudo timedatectl set-timezone "$TZ"
+
       - name: Configure feeds
         run: |
           set -e
@@ -34,12 +36,15 @@ jobs:
           sed -i '/openwrt-passwall.git/d' feeds.conf.default
           sed -i '/passwall_packages /d' feeds.conf.default
           sed -i '/passwall_luci /d' feeds.conf.default
+
       - name: Update feeds
         run: ./scripts/feeds update -a
+
       - name: Install only required LuCI feed packages
         run: |
           set -e
           ./scripts/feeds install luci luci-compat luci-i18n-base-zh-cn
+
       - name: Add JDCloud AX1800 eMMC factory image definition
         run: |
           set -e
@@ -59,6 +64,7 @@ jobs:
           endef
           TARGET_DEVICES += jdcloud_re-ss-01
           EOF
+
       - name: Set LAN IP to 192.168.20.1
         run: |
           set -e
@@ -71,6 +77,7 @@ jobs:
           exit 0
           EOF
           chmod +x files/etc/uci-defaults/99-jdcloud-lan-ip
+
       - name: Configure clean 2G firmware
         run: |
           set -e
@@ -87,26 +94,27 @@ jobs:
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
           EOF
           make defconfig
-          # v24.10.6 defconfig drops this image-size override when it is not
-          # exposed as a menu option. Restore it after dependency resolution.
+          # v24.10.6 may drop the manual image-size override during defconfig.
+          # Restore it after dependency resolution so the image builder receives 2048 MiB.
           sed -i '/^CONFIG_TARGET_ROOTFS_PARTSIZE=/d' .config
           echo 'CONFIG_TARGET_ROOTFS_PARTSIZE=2048' >> .config
           echo '===== TARGET / ROOTFS ====='
           grep -E '^CONFIG_TARGET_(qualcommax|ipq60xx|ROOTFS|KERNEL_PARTSIZE)' .config
           echo '===== CLEAN PACKAGE CONFIG ====='
-          grep -E '^CONFIG_PACKAGE_(luci|luci-i18n-base-zh-cn)' .config
+          grep -E '^CONFIG_PACKAGE_(luci|luci-compat|luci-i18n-base-zh-cn)' .config || true
           echo '===== FORBIDDEN THIRD-PARTY PACKAGES ====='
           if grep -E '^CONFIG_PACKAGE_(luci-app-(passwall|passwall2|homeproxy|mosdns|adguardhome|openclash)|passwall|homeproxy|mosdns|adguardhome|openclash)' .config; then
             echo 'ERROR: forbidden third-party package selected'
             exit 1
           fi
           grep -q '^CONFIG_TARGET_ROOTFS_PARTSIZE=2048$' .config
+
       - name: Verify image definition and clean config
         run: |
           set -e
           echo '===== JDCloud DEVICE DEFINITION ====='
           grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk
-          echo '===== 2G ====='
+          echo '===== 2G ROOTFS TARGET ====='
           grep '^CONFIG_TARGET_ROOTFS_PARTSIZE=2048$' .config
           echo '===== LAN DEFAULT ====='
           cat files/etc/uci-defaults/99-jdcloud-lan-ip
@@ -114,19 +122,43 @@ jobs:
           grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk | grep 'IMAGE/factory.bin'
           echo '===== EMMC IMAGE ====='
           grep -A14 '^define Device/jdcloud_re-ss-01' target/linux/qualcommax/image/ipq60xx.mk | grep 'Device/EmmcImage'
+
       - name: Download sources
         run: make download -j2 V=s
+
       - name: Compile firmware
         run: make -j2 V=s
+
       - name: Verify firmware
         if: success()
         run: |
           set -e
           TARGET_DIR='bin/targets/qualcommax/ipq60xx'
           test -d "$TARGET_DIR"
-          find "$TARGET_DIR" -maxdepth 2 -type f | sort
-          test -n "$(find "$TARGET_DIR" -type f -name '*jdcloud*re-ss-01*squashfs-factory.bin' -print -quit)"
-          test -n "$(find "$TARGET_DIR" -type f -name '*jdcloud*re-ss-01*squashfs-sysupgrade.bin' -print -quit)"
+          find "$TARGET_DIR" -maxdepth 2 -type f -printf '%p %s bytes\n' | sort
+
+          FACTORY="$(find "$TARGET_DIR" -type f -name '*jdcloud*re-ss-01*squashfs-factory.bin' -print -quit)"
+          SYSUPGRADE="$(find "$TARGET_DIR" -type f -name '*jdcloud*re-ss-01*squashfs-sysupgrade.bin' -print -quit)"
+          test -n "$FACTORY"
+          test -n "$SYSUPGRADE"
+
+          echo "FACTORY=$FACTORY"
+          echo "SYSUPGRADE=$SYSUPGRADE"
+          FACTORY_SIZE=$(stat -c '%s' "$FACTORY")
+          echo "FACTORY_SIZE=$FACTORY_SIZE bytes"
+
+          # A genuine 2 GiB rootfs target must produce a factory image far larger
+          # than the previous ~100-200 MiB small image. Fail instead of uploading
+          # a misleading artifact if the image-size target was not propagated.
+          MIN_FACTORY_SIZE=$((1800 * 1024 * 1024))
+          if [ "$FACTORY_SIZE" -lt "$MIN_FACTORY_SIZE" ]; then
+            echo "ERROR: factory image is smaller than 1800 MiB; 2G rootfs target was not propagated"
+            exit 1
+          fi
+
+          echo '===== FINAL IMAGE SIZE CHECK ====='
+          du -h "$FACTORY" "$SYSUPGRADE"
+
       - name: Upload firmware
         if: success()
         uses: actions/upload-artifact@v4
