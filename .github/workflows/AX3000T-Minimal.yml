@@ -1,4 +1,4 @@
-name: Build ImmortalWrt 24.10.6 - Xiaomi AX3000T Minimal
+name: Build ImmortalWrt - Xiaomi AX3000T Minimal U-Boot Layout
 
 on:
   push:
@@ -15,22 +15,20 @@ env:
 
 jobs:
   build:
-    name: AX3000T minimal
+    name: AX3000T minimal ubootmod
     runs-on: ubuntu-22.04
     steps:
+      - name: Checkout this ImmortalWrt repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Free disk space
         run: |
           set -eux
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
           sudo docker system prune -af || true
           df -h
-
-      - name: Checkout ImmortalWrt 24.10.6
-        uses: actions/checkout@v4
-        with:
-          repository: immortalwrt/immortalwrt
-          ref: v24.10.6
-          fetch-depth: 1
 
       - name: Install build dependencies
         env:
@@ -46,55 +44,54 @@ jobs:
             libpython3-dev time
           sudo timedatectl set-timezone "$TZ"
 
-      - name: Configure feeds
+      - name: Keep normal feeds only
         run: |
           set -eux
-          # This build deliberately uses only the normal ImmortalWrt feeds.
-          # No PassWall/HomeProxy/MosDNS/AdGuard/OpenClash feeds are added.
           sed -i '/passwall/d;/homeproxy/d;/mosdns/d;/adguard/d;/openclash/d' feeds.conf.default || true
-          cat feeds.conf.default
-
-      - name: Update and install feeds
-        run: |
-          set -eux
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Create minimal AX3000T configuration
+      - name: Configure AX3000T minimal ubootmod
         run: |
           set -eux
+          rm -f .config
           cat > .config <<'EOF'
           CONFIG_TARGET_mediatek=y
           CONFIG_TARGET_mediatek_filogic=y
-          CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_mi-router-ax3000t=y
+          CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_mi-router-ax3000t-ubootmod=y
           CONFIG_TARGET_ROOTFS_SQUASHFS=y
           CONFIG_TARGET_ROOTFS_PARTSIZE=20
           CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_luci-theme-bootstrap=y
           CONFIG_PACKAGE_luci-app-firewall=y
           CONFIG_PACKAGE_wpad-basic-mbedtls=y
-          # IPv6 completely disabled
+          # IPv6 off
           # CONFIG_IPV6 is not set
           # CONFIG_PACKAGE_odhcp6c is not set
           # CONFIG_PACKAGE_odhcpd-ipv6only is not set
           # CONFIG_PACKAGE_luci-proto-ipv6 is not set
-          # PPP/PPPoE completely disabled
+          # PPP/PPPoE off
           # CONFIG_PACKAGE_ppp is not set
           # CONFIG_PACKAGE_ppp-mod-pppoe is not set
           # CONFIG_PACKAGE_kmod-ppp is not set
           # CONFIG_PACKAGE_kmod-pppoe is not set
           # CONFIG_PACKAGE_luci-proto-ppp is not set
+          # Unneeded services off
+          # CONFIG_PACKAGE_odhcpd is not set
+          # CONFIG_PACKAGE_luci-app-upnp is not set
+          # CONFIG_PACKAGE_miniupnpd is not set
+          # CONFIG_PACKAGE_sqm-scripts is not set
+          # CONFIG_PACKAGE_luci-app-sqm is not set
+          # CONFIG_PACKAGE_dnsmasq-full is not set
           EOF
 
           make defconfig
 
-          # The Filogic target defaults include PPP/PPPoE and IPv6. Force them off
-          # after defconfig so they cannot be pulled back into the image.
           python3 - <<'PY'
           from pathlib import Path
           p = Path('.config')
-          s = p.read_text()
-          forced_off = [
+          lines = p.read_text().splitlines()
+          off = {
               'CONFIG_IPV6',
               'CONFIG_PACKAGE_odhcp6c',
               'CONFIG_PACKAGE_odhcpd-ipv6only',
@@ -104,45 +101,44 @@ jobs:
               'CONFIG_PACKAGE_kmod-ppp',
               'CONFIG_PACKAGE_kmod-pppoe',
               'CONFIG_PACKAGE_luci-proto-ppp',
-              'CONFIG_DEFAULT_odhcp6c',
-              'CONFIG_DEFAULT_odhcpd-ipv6only',
-              'CONFIG_DEFAULT_ppp',
-              'CONFIG_DEFAULT_ppp-mod-pppoe',
-              'CONFIG_PACKAGE_kmod-phy-aquantia',
-              'CONFIG_DEFAULT_kmod-phy-aquantia',
-          ]
-          lines = s.splitlines()
-          out = []
-          seen = set()
+              'CONFIG_PACKAGE_odhcpd',
+              'CONFIG_PACKAGE_luci-app-upnp',
+              'CONFIG_PACKAGE_miniupnpd',
+              'CONFIG_PACKAGE_sqm-scripts',
+              'CONFIG_PACKAGE_luci-app-sqm',
+              'CONFIG_PACKAGE_dnsmasq-full',
+              'CONFIG_PACKAGE_wpad-openssl',
+              'CONFIG_PACKAGE_wpad-mbedtls',
+          }
+          out=[]
+          seen=set()
           for line in lines:
-              key = line.split('=', 1)[0].lstrip('# ').replace(' is not set', '')
-              if key in forced_off:
+              stripped=line.lstrip('# ')
+              key=stripped.split('=',1)[0].replace(' is not set','').strip()
+              if key in off:
                   if key not in seen:
-                      out.append(f'# {key} is not set')
+                      out.append('# %s is not set' % key)
                       seen.add(key)
               else:
                   out.append(line)
-          for key in forced_off:
+          for key in sorted(off):
               if key not in seen:
-                  out.append(f'# {key} is not set')
-          p.write_text('\n'.join(out) + '\n')
+                  out.append('# %s is not set' % key)
+          p.write_text('\n'.join(out)+'\n')
           PY
 
           make olddefconfig
 
-          # Verify the important exclusions after dependency resolution.
-          echo '===== FINAL AX3000T CONFIG CHECK ====='
-          grep -E 'TARGET_mediatek|TARGET_PROFILE|TARGET_ROOTFS_PARTSIZE|CONFIG_IPV6|PACKAGE_(ppp|pppoe|odhcp6c|odhcpd-ipv6only|luci-proto-ipv6|luci-proto-ppp|kmod-phy-aquantia)' .config || true
-          echo '===== DEFAULT PACKAGE CHECK ====='
-          grep -E 'DEFAULT_(ppp|ppp-mod-pppoe|odhcp6c|odhcpd-ipv6only|kmod-phy-aquantia)' .config || true
+          echo '===== TARGET ====='
+          grep -E '^CONFIG_TARGET_(mediatek|TARGET)|^CONFIG_TARGET_ROOTFS_PARTSIZE' .config || true
+          echo '===== FORCED OFF ====='
+          grep -E '^# CONFIG_(IPV6|PACKAGE_(odhcp6c|odhcpd|odhcpd-ipv6only|luci-proto-ipv6|ppp|ppp-mod-pppoe|kmod-ppp|kmod-pppoe|luci-proto-ppp|miniupnpd|luci-app-upnp|sqm-scripts|luci-app-sqm|dnsmasq-full|wpad-openssl|wpad-mbedtls)) is not set$' .config || true
 
-      - name: Add first-boot LAN configuration
+      - name: Set LAN 192.168.16.1 and disable IPv6 config
         run: |
           set -eux
           mkdir -p files/etc/uci-defaults
           cat > files/etc/uci-defaults/99-ax3000t-minimal <<'EOF'
-          # Xiaomi Mi Router AX3000T minimal build
-          # LAN: 192.168.16.1, IPv4 only
           uci set network.lan.proto='static'
           uci set network.lan.ipaddr='192.168.16.1'
           uci set network.lan.netmask='255.255.255.0'
@@ -156,29 +152,27 @@ jobs:
           EOF
           chmod 0755 files/etc/uci-defaults/99-ax3000t-minimal
 
-      - name: Build AX3000T
+      - name: Build firmware
         run: |
           set -eux
           export FORCE_UNSAFE_CONFIGURE=1
-          make -j$(nproc) download V=s
+          make -j$(nproc) download
           make -j$(nproc) V=s
 
-      - name: Verify firmware and print sizes
+      - name: Verify and collect AX3000T images
         run: |
           set -eux
           OUT=bin/targets/mediatek/filogic
           ls -lah "$OUT"
-          echo '===== AX3000T images ====='
-          find "$OUT" -maxdepth 1 -type f -iname '*ax3000t*' -printf '%f %s bytes\n' | sort
-          echo '===== final exclusions ====='
-          grep -E '^# CONFIG_(IPV6|PACKAGE_(ppp|ppp-mod-pppoe|kmod-ppp|kmod-pppoe|odhcp6c|odhcpd-ipv6only|luci-proto-ipv6|luci-proto-ppp)|DEFAULT_(ppp|ppp-mod-pppoe|odhcp6c|odhcpd-ipv6only)) is not set$' .config || true
+          find "$OUT" -maxdepth 1 -type f -iname '*xiaomi_mi-router-ax3000t-ubootmod*' -printf '%f %s bytes\n' | sort
+          test -n "$(find "$OUT" -maxdepth 1 -type f -iname '*xiaomi_mi-router-ax3000t-ubootmod*')"
 
-      - name: Upload firmware artifacts
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ImmortalWrt-24.10.6-Xiaomi-AX3000T-Minimal
+          name: ImmortalWrt-Xiaomi-AX3000T-Minimal-Ubootmod
           path: |
-            bin/targets/mediatek/filogic/*ax3000t*
+            bin/targets/mediatek/filogic/*xiaomi_mi-router-ax3000t-ubootmod*
             bin/targets/mediatek/filogic/sha256sums
           if-no-files-found: error
           retention-days: 30
