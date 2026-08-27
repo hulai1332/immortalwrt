@@ -1,4 +1,4 @@
-name: Build ImmortalWrt - Xiaomi AX3000T Minimal U-Boot Layout
+name: Build ImmortalWrt - Xiaomi AX3000T Minimal
 
 on:
   push:
@@ -15,7 +15,7 @@ env:
 
 jobs:
   build:
-    name: AX3000T minimal ubootmod
+    name: AX3000T minimal
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout this ImmortalWrt repository
@@ -51,14 +51,14 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Configure AX3000T minimal ubootmod
+      - name: Configure AX3000T minimal
         run: |
           set -eux
           rm -f .config
           cat > .config <<'EOF'
           CONFIG_TARGET_mediatek=y
           CONFIG_TARGET_mediatek_filogic=y
-          CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_mi-router-ax3000t-ubootmod=y
+          CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_mi-router-ax3000t=y
           CONFIG_TARGET_ROOTFS_SQUASHFS=y
           CONFIG_TARGET_ROOTFS_PARTSIZE=20
           CONFIG_PACKAGE_luci=y
@@ -90,7 +90,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           p = Path('.config')
-          lines = p.read_text().splitlines()
           off = {
               'CONFIG_IPV6',
               'CONFIG_PACKAGE_odhcp6c',
@@ -110,28 +109,21 @@ jobs:
               'CONFIG_PACKAGE_wpad-openssl',
               'CONFIG_PACKAGE_wpad-mbedtls',
           }
+          lines = p.read_text().splitlines()
           out=[]
-          seen=set()
           for line in lines:
-              stripped=line.lstrip('# ')
-              key=stripped.split('=',1)[0].replace(' is not set','').strip()
+              key=line.lstrip('# ').split('=',1)[0].replace(' is not set','').strip()
               if key in off:
-                  if key not in seen:
-                      out.append('# %s is not set' % key)
-                      seen.add(key)
-              else:
-                  out.append(line)
-          for key in sorted(off):
-              if key not in seen:
-                  out.append('# %s is not set' % key)
+                  continue
+              out.append(line)
+          out += ['# %s is not set' % k for k in sorted(off)]
           p.write_text('\n'.join(out)+'\n')
           PY
-
           make olddefconfig
 
           echo '===== TARGET ====='
-          grep -E '^CONFIG_TARGET_(mediatek|TARGET)|^CONFIG_TARGET_ROOTFS_PARTSIZE' .config || true
-          echo '===== FORCED OFF ====='
+          grep -E '^CONFIG_TARGET_mediatek|^CONFIG_TARGET_ROOTFS_PARTSIZE' .config || true
+          echo '===== EXCLUSIONS ====='
           grep -E '^# CONFIG_(IPV6|PACKAGE_(odhcp6c|odhcpd|odhcpd-ipv6only|luci-proto-ipv6|ppp|ppp-mod-pppoe|kmod-ppp|kmod-pppoe|luci-proto-ppp|miniupnpd|luci-app-upnp|sqm-scripts|luci-app-sqm|dnsmasq-full|wpad-openssl|wpad-mbedtls)) is not set$' .config || true
 
       - name: Set LAN 192.168.16.1 and disable IPv6 config
@@ -164,15 +156,15 @@ jobs:
           set -eux
           OUT=bin/targets/mediatek/filogic
           ls -lah "$OUT"
-          find "$OUT" -maxdepth 1 -type f -iname '*xiaomi_mi-router-ax3000t-ubootmod*' -printf '%f %s bytes\n' | sort
-          test -n "$(find "$OUT" -maxdepth 1 -type f -iname '*xiaomi_mi-router-ax3000t-ubootmod*')"
+          find "$OUT" -maxdepth 1 -type f -iname '*xiaomi_mi-router-ax3000t*' -printf '%f %s bytes\n' | sort
+          test -n "$(find "$OUT" -maxdepth 1 -type f -iname '*xiaomi_mi-router-ax3000t*')"
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ImmortalWrt-Xiaomi-AX3000T-Minimal-Ubootmod
+          name: ImmortalWrt-Xiaomi-AX3000T-Minimal
           path: |
-            bin/targets/mediatek/filogic/*xiaomi_mi-router-ax3000t-ubootmod*
+            bin/targets/mediatek/filogic/*xiaomi_mi-router-ax3000t*
             bin/targets/mediatek/filogic/sha256sums
           if-no-files-found: error
           retention-days: 30
